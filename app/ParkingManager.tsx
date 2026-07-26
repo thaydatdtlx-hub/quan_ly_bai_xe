@@ -109,6 +109,7 @@ export default function ParkingManager() {
   const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState(currentMonth);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notificationReadAt, setNotificationReadAt] = useState("");
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -158,6 +159,29 @@ export default function ParkingManager() {
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setNotificationReadAt(localStorage.getItem("parking_notifications_read_at") || "");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (data.session?.role !== "admin") return;
+    const timer = window.setInterval(() => {
+      fetch("/api/parking", { cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) return null;
+          return response.json() as Promise<Data>;
+        })
+        .then((result) => {
+          if (result?.session?.role === "admin") setData(result);
+        })
+        .catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [data.session?.role]);
 
   async function submit(payload: Record<string, unknown>) {
     setSaving(true);
@@ -212,7 +236,14 @@ export default function ParkingManager() {
     filteredData.payments.reduce((sum, item) => sum + item.amount, 0);
   const washesToday = filteredData.washes.filter((item) => date(item.createdAt) === date(new Date().toISOString())).length;
   const isAdmin = data.session?.role === "admin";
-  const unreadNotifications = data.notifications.filter((item) => !item.isRead).length;
+  const visibleNotifications = useMemo(
+    () => data.notifications.map((item) => ({
+      ...item,
+      isRead: item.isRead || Boolean(notificationReadAt && item.createdAt <= notificationReadAt),
+    })),
+    [data.notifications, notificationReadAt],
+  );
+  const unreadNotifications = visibleNotifications.filter((item) => !item.isRead).length;
   const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.id === "washes");
   const accountInitial = data.session?.fullName.trim().charAt(0).toLocaleUpperCase("vi") || "U";
 
@@ -222,6 +253,17 @@ export default function ParkingManager() {
     setModal(null);
     setView("overview");
     setAuthRequired(true);
+  }
+
+  function markNotificationsRead() {
+    const readAt = new Date().toISOString();
+    setNotificationReadAt(readAt);
+    localStorage.setItem("parking_notifications_read_at", readAt);
+    void fetch("/api/parking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "markNotificationsRead" }),
+    });
   }
 
   async function exportData() {
@@ -246,7 +288,7 @@ export default function ParkingManager() {
       addSheet("Xe trong bãi", data.vehicles.map((item) => ({
         "Ô đỗ": safeCell(item.slot),
         "Biển số": safeCell(item.plate),
-        "Tên lái xe": safeCell(item.driverName),
+        "CHỦ XE": safeCell(item.driverName),
         "Số điện thoại": safeCell(item.phone),
         "Loại xe": safeCell(item.vehicleType),
         "Tiền tháng": item.monthlyFee,
@@ -326,10 +368,10 @@ export default function ParkingManager() {
               </button>
               {notificationOpen && (
                 <NotificationPanel
-                  notifications={data.notifications}
+                  notifications={visibleNotifications}
                   saving={saving}
                   onClose={() => setNotificationOpen(false)}
-                  onMarkAll={() => void submit({ action: "markNotificationsRead" })}
+                  onMarkAll={markNotificationsRead}
                 />
               )}
             </div>
@@ -549,7 +591,7 @@ function Overview({ data, unpaid, washesToday, totalIncome, setView, openModal }
         <Card title="Xe gần đây" icon="◷" action="Xem tất cả" onAction={() => setView("vehicles")}>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Ô</th><th>Biển số</th><th>Tên lái xe</th><th>Điện thoại</th><th>Tiền tháng</th><th>Trạng thái</th></tr></thead>
+              <thead><tr><th>Ô</th><th>Biển số</th><th>CHỦ XE</th><th>Điện thoại</th><th>Tiền tháng</th><th>Trạng thái</th></tr></thead>
               <tbody>{data.vehicles.slice(0, 5).map((vehicle) => (
                 <tr key={vehicle.id}>
                   <td><span className="slot">{vehicle.slot}</span></td>
@@ -624,7 +666,7 @@ function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePai
 }) {
   return (
     <section className="page-section">
-      <PageHeading eyebrow="QUẢN LÝ CHỖ ĐỖ" title={`${vehicles.length} xe trong bãi`} description="Theo dõi ô đỗ, thông tin lái xe, tiền tháng và lượt rửa còn lại." action={onAdd} actionLabel="Thêm xe" />
+      <PageHeading eyebrow="QUẢN LÝ CHỖ ĐỖ" title={`${vehicles.length} xe trong bãi`} description="Theo dõi ô đỗ, thông tin chủ xe, tiền tháng và lượt rửa còn lại." action={onAdd} actionLabel="Thêm xe" />
       <div className="toolbar"><label><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm biển số, tên, số điện thoại hoặc ô đỗ…" /></label></div>
       <div className="vehicle-grid">
         {vehicles.map((vehicle) => (
@@ -731,7 +773,7 @@ function VehicleForm({ vehicle, saving, onSubmit }: { vehicle: Vehicle | null; s
     const form = new FormData(event.currentTarget);
     void onSubmit({ action: vehicle ? "updateVehicle" : "addVehicle", vehicleId: vehicle?.id, slot: form.get("slot"), plate: form.get("plate"), driverName: form.get("driverName"), phone: form.get("phone"), vehicleType: form.get("vehicleType"), monthlyFee: form.get("monthlyFee"), washCredits: form.get("washCredits"), monthPaid: form.get("monthPaid") === "on" });
   }
-  return <form onSubmit={handle} className="form-grid"><Field label="Ô đỗ" name="slot" placeholder="A01" defaultValue={vehicle?.slot} required /><Field label="Biển số xe" name="plate" placeholder="51H-123.45" defaultValue={vehicle?.plate} required /><Field label="Tên lái xe" name="driverName" placeholder="Nguyễn Văn A" defaultValue={vehicle?.driverName} required /><Field label="Số điện thoại" name="phone" placeholder="0901 234 567" defaultValue={vehicle?.phone} required /><SelectField label="Loại xe" name="vehicleType" options={["Ô tô", "Xe máy", "Xe tải", "Xe khách"]} defaultValue={vehicle?.vehicleType} /><Field label="Tiền gửi mỗi tháng" name="monthlyFee" type="number" defaultValue={String(vehicle?.monthlyFee ?? 1200000)} required /><Field label="Số lượt rửa có sẵn" name="washCredits" type="number" defaultValue={String(vehicle?.washCredits ?? 0)} /><label className="check-field"><input type="checkbox" name="monthPaid" defaultChecked={vehicle?.monthPaid} /><span>Xe đã đóng tiền tháng này</span></label><SubmitButton saving={saving} label={vehicle ? "Lưu thay đổi" : "Lưu xe vào bãi"} /></form>;
+  return <form onSubmit={handle} className="form-grid"><Field label="Ô đỗ" name="slot" placeholder="A01" defaultValue={vehicle?.slot} required /><Field label="Biển số xe" name="plate" placeholder="51H-123.45" defaultValue={vehicle?.plate} required /><Field label="CHỦ XE" name="driverName" placeholder="Nguyễn Văn A" defaultValue={vehicle?.driverName} required /><Field label="Số điện thoại" name="phone" placeholder="0901 234 567" defaultValue={vehicle?.phone} required /><SelectField label="Loại xe" name="vehicleType" options={["Ô tô", "Xe máy", "Xe tải", "Xe khách"]} defaultValue={vehicle?.vehicleType} /><Field label="Tiền gửi mỗi tháng" name="monthlyFee" type="number" defaultValue={String(vehicle?.monthlyFee ?? 1200000)} required /><Field label="Số lượt rửa có sẵn" name="washCredits" type="number" defaultValue={String(vehicle?.washCredits ?? 0)} /><label className="check-field"><input type="checkbox" name="monthPaid" defaultChecked={vehicle?.monthPaid} /><span>Xe đã đóng tiền tháng này</span></label><SubmitButton saving={saving} label={vehicle ? "Lưu thay đổi" : "Lưu xe vào bãi"} /></form>;
 }
 
 function WashForm({ vehicles, saving, onSubmit }: { vehicles: Vehicle[]; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {

@@ -59,6 +59,7 @@ function notification(row: Record<string, unknown>) {
     type: String(row.type),
     title: String(row.title),
     body: String(row.body),
+    sourceId: row.source_id == null ? null : Number(row.source_id),
     createdByName: String(row.created_by_name || ""),
     isRead: Boolean(row.is_read),
     createdAt: String(row.created_at),
@@ -88,12 +89,38 @@ async function adminData(session: ParkingSession) {
     adminRequest("parking_payments?select=*&order=created_at.desc,id.desc&limit=200"),
     notificationsRequest,
   ]) as [Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[]];
+  const savedNotifications = notifications.map(notification);
+  const notifiedWashIds = new Set(
+    savedNotifications
+      .map((item) => item.sourceId)
+      .filter((id): id is number => id != null),
+  );
+  const washNotifications = washes
+    .filter((row) => !notifiedWashIds.has(Number(row.id)))
+    .slice(0, 100)
+    .map((row) => {
+      const creator = String(row.created_by_name || "");
+      return {
+        id: 1_000_000_000 + Number(row.id),
+        type: "wash_activity",
+        title: creator ? `${creator} vừa nhập lượt rửa` : "Có lượt rửa mới được nhập",
+        body: `Đã ghi ${String(row.work_item)} cho xe ${String(row.plate)}.`,
+        sourceId: Number(row.id),
+        createdByName: creator,
+        isRead: false,
+        createdAt: String(row.created_at),
+      };
+    });
+  const mergedNotifications = [...savedNotifications, ...washNotifications]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 100);
+
   return {
     vehicles: vehicles.map((row) => vehicle(row)),
     washes: washes.map(wash),
     services: services.map(service),
     payments: payments.map(payment),
-    notifications: notifications.map(notification),
+    notifications: mergedNotifications,
     session,
   };
 }
@@ -131,6 +158,54 @@ export async function POST(request: Request) {
     const action = String(payload.action || "");
     if (session.role !== "admin" && action !== "recordWash") {
       return Response.json({ error: "Tài khoản nhân viên chỉ được ghi lượt rửa xe." }, { status: 403 });
+    }
+
+    if (action === "updateVehicle") {
+      const vehicleId = Number(payload.vehicleId);
+      const slot = String(payload.slot || "").trim().toLocaleUpperCase("vi");
+      const plate = String(payload.plate || "").trim().toLocaleUpperCase("vi");
+      const ownerName = String(payload.driverName || "").trim();
+      const phone = String(payload.phone || "").trim();
+      if (!vehicleId || !slot || !plate || !ownerName || !phone) {
+        return Response.json({ error: "Vui lòng nhập đủ ô đỗ, biển số, chủ xe và số điện thoại." }, { status: 400 });
+      }
+      const updated = await adminRequest(`parking_vehicles?id=eq.${vehicleId}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          slot,
+          plate,
+          driver_name: ownerName,
+          phone,
+          vehicle_type: String(payload.vehicleType || "Ô tô").trim() || "Ô tô",
+          monthly_fee: Math.max(Number(payload.monthlyFee) || 0, 0),
+          month_paid: Boolean(payload.monthPaid),
+          wash_credits: Math.max(Math.trunc(Number(payload.washCredits) || 0), 0),
+        }),
+      }) as Record<string, unknown>[];
+      if (!updated.length) {
+        return Response.json({ error: "Không tìm thấy xe cần chỉnh sửa." }, { status: 404 });
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteVehicle") {
+      const vehicleId = Number(payload.vehicleId);
+      if (!vehicleId) return Response.json({ error: "Xe không hợp lệ." }, { status: 400 });
+      await adminRequest(`parking_vehicles?id=eq.${vehicleId}`, {
+        method: "DELETE",
+        headers: { Prefer: "return=minimal" },
+      });
+      return Response.json({ ok: true });
+    }
+
+    if (action === "markNotificationsRead") {
+      await adminRequest("parking_notifications?is_read=eq.false", {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ is_read: true }),
+      }).catch(() => null);
+      return Response.json({ ok: true });
     }
 
     if (action === "recordWash") {
@@ -175,26 +250,6 @@ export async function POST(request: Request) {
           p_wash_credits: payload.washCredits,
         },
       },
-      updateVehicle: {
-        name: "parking_update_vehicle",
-        body: {
-          p_vehicle_id: payload.vehicleId,
-          p_slot: payload.slot,
-          p_plate: payload.plate,
-          p_driver_name: payload.driverName,
-          p_phone: payload.phone,
-          p_vehicle_type: payload.vehicleType,
-          p_monthly_fee: payload.monthlyFee,
-          p_month_paid: payload.monthPaid,
-          p_wash_credits: payload.washCredits,
-        },
-      },
-      deleteVehicle: {
-        name: "parking_delete_vehicle",
-        body: {
-          p_vehicle_id: payload.vehicleId,
-        },
-      },
       deleteWash: {
         name: "parking_delete_wash",
         body: {
@@ -227,10 +282,6 @@ export async function POST(request: Request) {
           p_vehicle_id: payload.vehicleId,
           p_month_paid: payload.monthPaid,
         },
-      },
-      markNotificationsRead: {
-        name: "parking_mark_notifications_read",
-        body: {},
       },
     };
     const selected = rpc[action];
