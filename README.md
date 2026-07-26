@@ -7,17 +7,20 @@ dịch vụ thuê, chiết khấu và số lượt rửa tặng cho xe tại bã
 
 1. Mở **Supabase → SQL Editor**.
 2. Chạy toàn bộ nội dung trong `supabase/parking.sql`.
-3. Lấy ba giá trị tại **Project Settings → API**:
+3. Lấy hai giá trị tại **Project Settings → API**:
    - Project URL
    - Secret key (`sb_secret_...`)
-   - Publishable key (`sb_publishable_...`)
+
+Publishable key (`sb_publishable_...`) là tùy chọn. Nếu không khai báo, máy chủ
+sẽ dùng secret key cho các yêu cầu xác thực và không gửi key này xuống trình
+duyệt.
 
 Tạo `.env.local` khi chạy trên máy:
 
 ```env
 SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 SUPABASE_SECRET_KEY=YOUR_SERVER_ONLY_SB_SECRET_KEY
-SUPABASE_PUBLISHABLE_KEY=YOUR_SB_PUBLISHABLE_KEY
+SUPABASE_PUBLISHABLE_KEY=YOUR_OPTIONAL_SB_PUBLISHABLE_KEY
 ```
 
 Không đưa `SUPABASE_SECRET_KEY` vào mã nguồn hoặc biến có tiền tố
@@ -47,11 +50,12 @@ quản trị.
 
 ## Triển khai Vercel
 
-Kết nối repository với Vercel, sau đó thêm ba Environment Variables:
+Kết nối repository với Vercel, sau đó thêm hai Environment Variables bắt buộc:
 
 - `SUPABASE_URL`
 - `SUPABASE_SECRET_KEY`
-- `SUPABASE_PUBLISHABLE_KEY`
+
+Có thể thêm `SUPABASE_PUBLISHABLE_KEY`, nhưng không bắt buộc.
 
 Vercel sẽ dùng lệnh `npm run vercel-build`. File `vercel.json` đã cấu hình sẵn
 cho Next.js.

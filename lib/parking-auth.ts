@@ -34,7 +34,7 @@ function config() {
 
 function ensureConfig() {
   const current = config();
-  if (!current.url || !current.adminKey || !current.publishableKey) {
+  if (!current.url || !current.adminKey) {
     throw new Error("Chưa cấu hình đầy đủ Supabase cho đăng nhập.");
   }
   return current;
@@ -71,12 +71,13 @@ export async function adminRequest(path: string, init: RequestInit = {}) {
 }
 
 async function authRequest(path: string, init: RequestInit = {}) {
-  const { url, publishableKey } = ensureConfig();
+  const { url, adminKey, publishableKey } = ensureConfig();
+  const apiKey = publishableKey || adminKey;
   const response = await fetch(`${url}/auth/v1/${path}`, {
     ...init,
     cache: "no-store",
     headers: {
-      apikey: publishableKey,
+      apikey: apiKey,
       "Content-Type": "application/json",
       ...init.headers,
     },
