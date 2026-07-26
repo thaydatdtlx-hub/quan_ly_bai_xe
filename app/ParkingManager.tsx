@@ -46,7 +46,20 @@ type Payment = {
   createdAt: string;
 };
 
-type Data = { vehicles: Vehicle[]; washes: Wash[]; services: Service[]; payments: Payment[]; demo?: boolean };
+type Session = {
+  userId: string;
+  email: string;
+  fullName: string;
+  role: "admin" | "staff_wash";
+};
+
+type Data = {
+  vehicles: Vehicle[];
+  washes: Wash[];
+  services: Service[];
+  payments: Payment[];
+  session?: Session;
+};
 type View = "overview" | "vehicles" | "washes" | "services" | "finance";
 type Modal = "vehicle" | "wash" | "payment" | "service" | null;
 
@@ -69,6 +82,7 @@ export default function ParkingManager() {
   const [view, setView] = useState<View>("overview");
   const [modal, setModal] = useState<Modal>(null);
   const [loading, setLoading] = useState(true);
+  const [authRequired, setAuthRequired] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
@@ -79,8 +93,16 @@ export default function ParkingManager() {
     try {
       const response = await fetch("/api/parking", { cache: "no-store" });
       const result = await response.json() as Data & { error?: string };
+      if (response.status === 401 || result.error?.includes("Chưa cấu hình đầy đủ")) {
+        setData(initialData);
+        setModal(null);
+        setAuthRequired(true);
+        return;
+      }
       if (!response.ok) throw new Error(result.error || "Không tải được dữ liệu.");
       setData(result);
+      setAuthRequired(false);
+      if (result.session?.role === "staff_wash") setView("washes");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Không tải được dữ liệu.");
     } finally {
@@ -93,8 +115,15 @@ export default function ParkingManager() {
     fetch("/api/parking", { cache: "no-store" })
       .then(async (response) => {
         const result = await response.json() as Data & { error?: string };
+        if (response.status === 401 || result.error?.includes("Chưa cấu hình đầy đủ")) {
+          if (active) setAuthRequired(true);
+          return;
+        }
         if (!response.ok) throw new Error(result.error || "Không tải được dữ liệu.");
-        if (active) setData(result);
+        if (active) {
+          setData(result);
+          if (result.session?.role === "staff_wash") setView("washes");
+        }
       })
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : "Không tải được dữ liệu.");
@@ -115,6 +144,11 @@ export default function ParkingManager() {
         body: JSON.stringify(payload),
       });
       const result = await response.json() as { error?: string };
+      if (response.status === 401) {
+        setAuthRequired(true);
+        setModal(null);
+        return;
+      }
       if (!response.ok) throw new Error(result.error || "Không thể lưu dữ liệu.");
       setModal(null);
       await load();
@@ -141,16 +175,34 @@ export default function ParkingManager() {
     data.services.reduce((sum, item) => sum + item.finalAmount, 0) +
     data.payments.reduce((sum, item) => sum + item.amount, 0);
   const washesToday = data.washes.filter((item) => date(item.createdAt) === date(new Date().toISOString())).length;
+  const isAdmin = data.session?.role === "admin";
+  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.id === "washes");
+  const accountInitial = data.session?.fullName.trim().charAt(0).toLocaleUpperCase("vi") || "U";
+
+  async function logout() {
+    await fetch("/api/auth", { method: "DELETE" });
+    setData(initialData);
+    setModal(null);
+    setView("overview");
+    setAuthRequired(true);
+  }
+
+  if (authRequired) {
+    return <LoginScreen onSuccess={() => {
+      setAuthRequired(false);
+      void load();
+    }} />;
+  }
 
   return (
     <div className="app-shell">
       <header className="site-header">
-        <button className="brand" onClick={() => setView("overview")} aria-label="Về trang tổng quan">
+        <button className="brand" onClick={() => setView(isAdmin ? "overview" : "washes")} aria-label={isAdmin ? "Về trang tổng quan" : "Về nhật ký rửa xe"}>
           <span className="brand-mark">P</span>
           <strong>Quản lý bãi xe</strong>
         </button>
         <nav className="desktop-nav" aria-label="Điều hướng chính">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <button key={item.id} className={view === item.id ? "nav-item active" : "nav-item"} onClick={() => setView(item.id)}>
               <span>{item.label}</span>
             </button>
@@ -158,8 +210,12 @@ export default function ParkingManager() {
         </nav>
         <div className="header-actions">
           <button className="icon-button" onClick={() => void load()} aria-label="Tải lại dữ liệu">↻</button>
-          <div className="avatar" aria-label="Tài khoản Thầy Đạt">Đ</div>
-          <button className="header-primary" onClick={() => setModal("vehicle")}><span>＋</span> Thêm xe mới</button>
+          <div className="account-block">
+            <div className="avatar" aria-label={`Tài khoản ${data.session?.fullName}`}>{accountInitial}</div>
+            <span><strong>{data.session?.fullName}</strong><small>{isAdmin ? "Quản trị viên" : "Nhân viên rửa xe"}</small></span>
+          </div>
+          <button className="logout-button" onClick={() => void logout()}>Đăng xuất</button>
+          {isAdmin && <button className="header-primary" onClick={() => setModal("vehicle")}><span>＋</span> Thêm xe mới</button>}
         </div>
       </header>
 
@@ -174,16 +230,9 @@ export default function ParkingManager() {
         )}
 
         {error && <div className="alert" role="alert"><span>!</span><p>{error}</p><button onClick={() => setError("")}>×</button></div>}
-        {data.demo && !error && (
-          <div className="demo-banner" role="status">
-            <span>i</span>
-            <p><strong>Chế độ xem thử:</strong> thêm cấu hình Supabase trên máy chủ để lưu dữ liệu thật.</p>
-          </div>
-        )}
-
         {loading ? <LoadingState /> : (
           <>
-            {view === "overview" && (
+            {isAdmin && view === "overview" && (
               <Overview
                 data={data}
                 unpaid={unpaid}
@@ -193,7 +242,7 @@ export default function ParkingManager() {
                 openModal={setModal}
               />
             )}
-            {view === "vehicles" && (
+            {isAdmin && view === "vehicles" && (
               <VehiclesView
                 vehicles={filteredVehicles}
                 search={search}
@@ -204,21 +253,21 @@ export default function ParkingManager() {
               />
             )}
             {view === "washes" && <WashesView washes={data.washes} onAdd={() => setModal("wash")} />}
-            {view === "services" && <ServicesView services={data.services} onAdd={() => setModal("service")} />}
-            {view === "finance" && <FinanceView data={data} total={totalIncome} />}
+            {isAdmin && view === "services" && <ServicesView services={data.services} onAdd={() => setModal("service")} />}
+            {isAdmin && view === "finance" && <FinanceView data={data} total={totalIncome} />}
           </>
         )}
       </main>
 
-      <nav className="mobile-nav" aria-label="Điều hướng trên điện thoại">
-        {navItems.map((item) => (
+      <nav className={isAdmin ? "mobile-nav" : "mobile-nav staff"} aria-label="Điều hướng trên điện thoại">
+        {visibleNavItems.map((item) => (
           <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
             <span>{item.icon}</span><small>{item.label.replace(" trong bãi", "")}</small>
           </button>
         ))}
       </nav>
 
-      {modal && (
+      {modal && (isAdmin || modal === "wash") && (
         <ModalShell title={{ vehicle: "Thêm xe vào bãi", wash: "Ghi lượt rửa xe", payment: "Thu tiền tháng", service: "Thêm dịch vụ thuê" }[modal]} onClose={() => setModal(null)}>
           {modal === "vehicle" && <VehicleForm saving={saving} onSubmit={submit} />}
           {modal === "wash" && <WashForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
@@ -227,6 +276,56 @@ export default function ParkingManager() {
         </ModalShell>
       )}
     </div>
+  );
+}
+
+function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: String(form.get("username") || ""),
+          password: String(form.get("password") || ""),
+        }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "Đăng nhập không thành công.");
+      onSuccess();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Đăng nhập không thành công.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-card">
+        <div className="login-brand"><span className="brand-mark">P</span><div><strong>Quản lý bãi xe</strong><small>Vận hành nhanh, dữ liệu tập trung</small></div></div>
+        <div className="login-heading"><span>ĐĂNG NHẬP HỆ THỐNG</span><h1>Chào mừng trở lại</h1><p>Nhập tài khoản do quản trị viên cấp để tiếp tục.</p></div>
+        {error && <div className="login-error" role="alert">! <span>{error}</span></div>}
+        <form className="login-form" onSubmit={login}>
+          <label><span>Tên đăng nhập</span><input name="username" autoComplete="username" placeholder="Ví dụ: admin" required autoFocus /></label>
+          <label><span>Mật khẩu</span><input name="password" type="password" autoComplete="current-password" placeholder="Nhập mật khẩu" required /></label>
+          <button type="submit" disabled={submitting}>{submitting ? "Đang đăng nhập…" : "Đăng nhập"}</button>
+        </form>
+        <p className="login-help">Admin quản lý toàn bộ hệ thống. Nhân viên chỉ được xem danh sách xe cần thiết và nhập lượt rửa xe.</p>
+      </section>
+      <aside className="login-visual" aria-hidden="true">
+        <span>VẬN HÀNH BÃI XE</span>
+        <h2>Mọi lượt xe, khoản thu và dịch vụ trong một nơi.</h2>
+        <div className="login-stat-grid"><div><strong>01</strong><small>Admin toàn quyền</small></div><div><strong>02</strong><small>Nhân viên rửa xe</small></div></div>
+      </aside>
+    </main>
   );
 }
 

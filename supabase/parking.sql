@@ -48,6 +48,15 @@ create table if not exists public.parking_payments (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.parking_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  email text not null unique,
+  full_name text not null,
+  role text not null check (role in ('admin', 'staff_wash')),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists parking_washes_created_at_idx on public.parking_washes(created_at desc);
 create index if not exists parking_services_created_at_idx on public.parking_services(created_at desc);
 create index if not exists parking_payments_created_at_idx on public.parking_payments(created_at desc);
@@ -56,6 +65,7 @@ alter table public.parking_vehicles enable row level security;
 alter table public.parking_washes enable row level security;
 alter table public.parking_services enable row level security;
 alter table public.parking_payments enable row level security;
+alter table public.parking_profiles enable row level security;
 
 create or replace function public.parking_add_vehicle(
   p_slot text,
@@ -207,11 +217,59 @@ as $$
   where id = p_vehicle_id;
 $$;
 
-revoke all on public.parking_vehicles, public.parking_washes, public.parking_services, public.parking_payments from anon, authenticated;
-grant select, insert, update, delete on public.parking_vehicles, public.parking_washes, public.parking_services, public.parking_payments to service_role;
+create or replace function public.parking_assign_role_by_email(
+  p_email text,
+  p_role text,
+  p_full_name text
+) returns void
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  selected_user auth.users%rowtype;
+begin
+  if p_role not in ('admin', 'staff_wash') then
+    raise exception 'Vai trò không hợp lệ.';
+  end if;
+
+  select * into selected_user
+  from auth.users
+  where lower(email) = lower(trim(p_email))
+  limit 1;
+
+  if not found then
+    raise exception 'Không tìm thấy tài khoản Auth có email %.', trim(p_email);
+  end if;
+
+  insert into public.parking_profiles (user_id, email, full_name, role, is_active)
+  values (
+    selected_user.id,
+    lower(trim(selected_user.email)),
+    coalesce(nullif(trim(p_full_name), ''), lower(trim(selected_user.email))),
+    p_role,
+    true
+  )
+  on conflict (user_id) do update
+  set email = excluded.email,
+      full_name = excluded.full_name,
+      role = excluded.role,
+      is_active = true;
+end;
+$$;
+
+revoke all on public.parking_vehicles, public.parking_washes, public.parking_services, public.parking_payments, public.parking_profiles from anon, authenticated;
+grant select, insert, update, delete on public.parking_vehicles, public.parking_washes, public.parking_services, public.parking_payments, public.parking_profiles to service_role;
 grant usage, select on all sequences in schema public to service_role;
 grant execute on function public.parking_add_vehicle(text, text, text, text, text, bigint, boolean, integer) to service_role;
 grant execute on function public.parking_record_wash(bigint, text, text, bigint, bigint, boolean) to service_role;
 grant execute on function public.parking_collect_payment(bigint, bigint, text) to service_role;
 grant execute on function public.parking_add_service(bigint, text, text, bigint, bigint, integer, text) to service_role;
 grant execute on function public.parking_toggle_paid(bigint, boolean) to service_role;
+revoke execute on function public.parking_assign_role_by_email(text, text, text) from public, anon, authenticated;
+grant execute on function public.parking_assign_role_by_email(text, text, text) to service_role;
+
+-- Sau khi tạo 3 người dùng trong Supabase Authentication, chạy 3 dòng sau:
+-- select public.parking_assign_role_by_email('admin@parking.local', 'admin', 'Quản trị viên');
+-- select public.parking_assign_role_by_email('nhanvien1@parking.local', 'staff_wash', 'Nhân viên 1');
+-- select public.parking_assign_role_by_email('nhanvien2@parking.local', 'staff_wash', 'Nhân viên 2');
