@@ -52,6 +52,7 @@ type Notification = {
   type: string;
   title: string;
   body: string;
+  sourceId: number | null;
   createdByName: string;
   isRead: boolean;
   createdAt: string;
@@ -110,6 +111,7 @@ export default function ParkingManager() {
   const [monthFilter, setMonthFilter] = useState(currentMonth);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notificationReadAt, setNotificationReadAt] = useState("");
+  const [highlightedWashId, setHighlightedWashId] = useState<number | null>(null);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -182,6 +184,21 @@ export default function ParkingManager() {
     }, 20_000);
     return () => window.clearInterval(timer);
   }, [data.session?.role]);
+
+  useEffect(() => {
+    if (view !== "washes" || !highlightedWashId) return;
+    const scrollTimer = window.setTimeout(() => {
+      document.getElementById(`wash-${highlightedWashId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 150);
+    const clearTimer = window.setTimeout(() => setHighlightedWashId(null), 5_000);
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [view, highlightedWashId, monthFilter]);
 
   async function submit(payload: Record<string, unknown>) {
     setSaving(true);
@@ -264,6 +281,16 @@ export default function ParkingManager() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "markNotificationsRead" }),
     });
+  }
+
+  function openNotification(item: Notification) {
+    const readAt = notificationReadAt > item.createdAt ? notificationReadAt : item.createdAt;
+    setNotificationReadAt(readAt);
+    localStorage.setItem("parking_notifications_read_at", readAt);
+    setNotificationOpen(false);
+    setMonthFilter(monthKey(item.createdAt));
+    setView("washes");
+    if (item.sourceId) setHighlightedWashId(item.sourceId);
   }
 
   async function exportData() {
@@ -372,6 +399,7 @@ export default function ParkingManager() {
                   saving={saving}
                   onClose={() => setNotificationOpen(false)}
                   onMarkAll={markNotificationsRead}
+                  onSelect={openNotification}
                 />
               )}
             </div>
@@ -446,6 +474,7 @@ export default function ParkingManager() {
                 onAdd={() => setModal("wash")}
                 canDelete={isAdmin}
                 deleting={saving}
+                highlightedWashId={highlightedWashId}
                 onDelete={(wash) => {
                   const confirmed = window.confirm(
                     `Xóa lượt rửa ${wash.workItem} của xe ${wash.plate}? Hành động này không thể hoàn tác.`
@@ -534,11 +563,12 @@ function LoadingState() {
   return <div className="loading-grid" aria-label="Đang tải dữ liệu">{Array.from({ length: 8 }).map((_, index) => <div key={index} />)}</div>;
 }
 
-function NotificationPanel({ notifications, saving, onClose, onMarkAll }: {
+function NotificationPanel({ notifications, saving, onClose, onMarkAll, onSelect }: {
   notifications: Notification[];
   saving: boolean;
   onClose: () => void;
   onMarkAll: () => void;
+  onSelect: (notification: Notification) => void;
 }) {
   return (
     <section className="notification-panel" aria-label="Trung tâm thông báo">
@@ -548,14 +578,19 @@ function NotificationPanel({ notifications, saving, onClose, onMarkAll }: {
       </header>
       <div className="notification-list">
         {notifications.map((item) => (
-          <article className={item.isRead ? "notification-item" : "notification-item unread"} key={item.id}>
+          <button
+            type="button"
+            className={item.isRead ? "notification-item" : "notification-item unread"}
+            key={item.id}
+            onClick={() => onSelect(item)}
+          >
             <span className="notification-dot" />
             <div>
               <strong>{item.title}</strong>
               <p>{item.body}</p>
-              <small>{date(item.createdAt)} · {time(item.createdAt)}</small>
+              <small>{date(item.createdAt)} · {time(item.createdAt)} · Nhấn để xem chi tiết →</small>
             </div>
-          </article>
+          </button>
         ))}
         {!notifications.length && <Empty text="Chưa có hoạt động mới từ nhân viên." />}
       </div>
@@ -694,11 +729,12 @@ function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePai
   );
 }
 
-function WashesView({ washes, onAdd, canDelete, deleting, onDelete }: {
+function WashesView({ washes, onAdd, canDelete, deleting, highlightedWashId, onDelete }: {
   washes: Wash[];
   onAdd: () => void;
   canDelete: boolean;
   deleting: boolean;
+  highlightedWashId: number | null;
   onDelete: (wash: Wash) => void;
 }) {
   return (
@@ -708,7 +744,7 @@ function WashesView({ washes, onAdd, canDelete, deleting, onDelete }: {
         <div className="table-wrap">
           <table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Hạng mục</th><th>Người nhập</th><th>Giá</th><th>Giảm giá</th><th>Thành tiền</th>{canDelete && <th>Thao tác</th>}</tr></thead>
             <tbody>{washes.map((item) => (
-              <tr key={item.id}>
+              <tr id={`wash-${item.id}`} className={highlightedWashId === item.id ? "highlighted-row" : ""} key={item.id}>
                 <td>{date(item.createdAt)} · {time(item.createdAt)}</td>
                 <td><strong>{item.plate}</strong></td>
                 <td>{item.workItem}{item.usedCredit && <span className="mini-note">Dùng lượt tặng</span>}</td>

@@ -24,6 +24,7 @@ function wash(row: Record<string, unknown>) {
     discount: Number(row.discount),
     finalAmount: Number(row.final_amount),
     usedCredit: Boolean(row.used_credit),
+    createdById: String(row.created_by || ""),
     createdByName: String(row.created_by_name || ""),
     createdAt: String(row.created_at),
   };
@@ -82,20 +83,39 @@ async function adminData(session: ParkingSession) {
   const notificationsRequest = adminRequest(
     "parking_notifications?select=*&order=created_at.desc,id.desc&limit=100",
   ).catch(() => []);
-  const [vehicles, washes, services, payments, notifications] = await Promise.all([
+  const profilesRequest = adminRequest(
+    "parking_profiles?select=user_id,full_name&is_active=eq.true",
+  ).catch(() => []);
+  const [vehicles, washes, services, payments, notifications, profiles] = await Promise.all([
     adminRequest("parking_vehicles?select=*&order=id.desc"),
     adminRequest("parking_washes?select=*&order=created_at.desc,id.desc&limit=200"),
     adminRequest("parking_services?select=*&order=created_at.desc,id.desc&limit=200"),
     adminRequest("parking_payments?select=*&order=created_at.desc,id.desc&limit=200"),
     notificationsRequest,
-  ]) as [Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[]];
+    profilesRequest,
+  ]) as [Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[]];
   const savedNotifications = notifications.map(notification);
+  const profileNames = new Map(
+    profiles.map((row) => [String(row.user_id), String(row.full_name || "")]),
+  );
+  const notificationNames = new Map(
+    savedNotifications
+      .filter((item) => item.sourceId != null && item.createdByName)
+      .map((item) => [item.sourceId as number, item.createdByName]),
+  );
+  const enrichedWashes: Record<string, unknown>[] = washes.map((row) => ({
+    ...row,
+    created_by_name: String(row.created_by_name || "") ||
+      profileNames.get(String(row.created_by || "")) ||
+      notificationNames.get(Number(row.id)) ||
+      "",
+  }));
   const notifiedWashIds = new Set(
     savedNotifications
       .map((item) => item.sourceId)
       .filter((id): id is number => id != null),
   );
-  const washNotifications = washes
+  const washNotifications = enrichedWashes
     .filter((row) => !notifiedWashIds.has(Number(row.id)))
     .slice(0, 100)
     .map((row) => {
@@ -117,7 +137,7 @@ async function adminData(session: ParkingSession) {
 
   return {
     vehicles: vehicles.map((row) => vehicle(row)),
-    washes: washes.map(wash),
+    washes: enrichedWashes.map(wash),
     services: services.map(service),
     payments: payments.map(payment),
     notifications: mergedNotifications,
@@ -232,6 +252,20 @@ export async function POST(request: Request) {
           method: "POST",
           body: JSON.stringify(body),
         });
+      }
+      const recentWashes = await adminRequest(
+        `parking_washes?select=id&vehicle_id=eq.${Number(payload.vehicleId)}&order=id.desc&limit=1`,
+      ).catch(() => []) as Record<string, unknown>[];
+      const washId = Number(recentWashes[0]?.id);
+      if (washId) {
+        await adminRequest(`parking_washes?id=eq.${washId}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            created_by: session.userId,
+            created_by_name: session.fullName,
+          }),
+        }).catch(() => null);
       }
       return Response.json({ ok: true });
     }
