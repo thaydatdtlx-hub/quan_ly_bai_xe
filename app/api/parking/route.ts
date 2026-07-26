@@ -139,6 +139,12 @@ export async function POST(request: Request) {
           p_used_credit: payload.usedCredit,
         },
       },
+      deleteWash: {
+        name: "parking_delete_wash",
+        body: {
+          p_wash_id: payload.washId,
+        },
+      },
       collectPayment: {
         name: "parking_collect_payment",
         body: {

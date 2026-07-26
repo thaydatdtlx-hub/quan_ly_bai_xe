@@ -252,7 +252,20 @@ export default function ParkingManager() {
                 togglePaid={(vehicle) => void submit({ action: "togglePaid", vehicleId: vehicle.id, monthPaid: !vehicle.monthPaid })}
               />
             )}
-            {view === "washes" && <WashesView washes={data.washes} onAdd={() => setModal("wash")} />}
+            {view === "washes" && (
+              <WashesView
+                washes={data.washes}
+                onAdd={() => setModal("wash")}
+                canDelete={isAdmin}
+                deleting={saving}
+                onDelete={(wash) => {
+                  const confirmed = window.confirm(
+                    `Xóa lượt rửa ${wash.workItem} của xe ${wash.plate}? Hành động này không thể hoàn tác.`
+                  );
+                  if (confirmed) void submit({ action: "deleteWash", washId: wash.id });
+                }}
+              />
+            )}
             {isAdmin && view === "services" && <ServicesView services={data.services} onAdd={() => setModal("service")} />}
             {isAdmin && view === "finance" && <FinanceView data={data} total={totalIncome} />}
           </>
@@ -449,14 +462,30 @@ function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePai
   );
 }
 
-function WashesView({ washes, onAdd }: { washes: Wash[]; onAdd: () => void }) {
+function WashesView({ washes, onAdd, canDelete, deleting, onDelete }: {
+  washes: Wash[];
+  onAdd: () => void;
+  canDelete: boolean;
+  deleting: boolean;
+  onDelete: (wash: Wash) => void;
+}) {
   return (
     <section className="page-section">
       <PageHeading eyebrow="NHẬT KÝ CÔNG VIỆC" title="Lượt rửa xe" description="Theo dõi hạng mục, giá gốc, giảm giá và số tiền thực thu." action={onAdd} actionLabel="Ghi lượt rửa" />
       <div className="detail-card">
         <div className="table-wrap">
-          <table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Hạng mục</th><th>Giá</th><th>Giảm giá</th><th>Thành tiền</th></tr></thead>
-            <tbody>{washes.map((item) => <tr key={item.id}><td>{date(item.createdAt)} · {time(item.createdAt)}</td><td><strong>{item.plate}</strong></td><td>{item.workItem}{item.usedCredit && <span className="mini-note">Dùng lượt tặng</span>}</td><td>{money(item.price)}</td><td>{money(item.discount)}</td><td><strong className="amount">{money(item.finalAmount)}</strong></td></tr>)}</tbody>
+          <table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Hạng mục</th><th>Giá</th><th>Giảm giá</th><th>Thành tiền</th>{canDelete && <th>Thao tác</th>}</tr></thead>
+            <tbody>{washes.map((item) => (
+              <tr key={item.id}>
+                <td>{date(item.createdAt)} · {time(item.createdAt)}</td>
+                <td><strong>{item.plate}</strong></td>
+                <td>{item.workItem}{item.usedCredit && <span className="mini-note">Dùng lượt tặng</span>}</td>
+                <td>{money(item.price)}</td>
+                <td>{money(item.discount)}</td>
+                <td><strong className="amount">{money(item.finalAmount)}</strong></td>
+                {canDelete && <td><button className="delete-button" type="button" disabled={deleting} onClick={() => onDelete(item)}>Xóa</button></td>}
+              </tr>
+            ))}</tbody>
           </table>
         </div>
         {!washes.length && <Empty text="Chưa có lượt rửa nào." />}

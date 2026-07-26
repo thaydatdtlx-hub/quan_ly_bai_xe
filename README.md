@@ -46,7 +46,8 @@ select public.parking_assign_role_by_email('nhanvien2@parking.local', 'staff_was
 
 Admin được quản lý toàn bộ dữ liệu. Nhân viên chỉ thấy thông tin xe cần cho
 việc rửa xe và chỉ được ghi lượt rửa; API phía máy chủ cũng chặn các thao tác
-quản trị.
+quản trị. Admin có thể xóa lượt rửa nhập sai; nếu lượt đó đã dùng lượt rửa tặng,
+hệ thống tự hoàn lại một lượt cho xe.
 
 ## Triển khai Vercel
 

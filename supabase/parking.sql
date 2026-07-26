@@ -217,6 +217,35 @@ as $$
   where id = p_vehicle_id;
 $$;
 
+create or replace function public.parking_delete_wash(
+  p_wash_id bigint
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  selected_wash public.parking_washes%rowtype;
+begin
+  select * into selected_wash
+  from public.parking_washes
+  where id = p_wash_id
+  for update;
+
+  if not found then
+    raise exception 'Không tìm thấy lượt rửa cần xóa.';
+  end if;
+
+  delete from public.parking_washes where id = p_wash_id;
+
+  if selected_wash.used_credit and selected_wash.vehicle_id is not null then
+    update public.parking_vehicles
+    set wash_credits = wash_credits + 1
+    where id = selected_wash.vehicle_id;
+  end if;
+end;
+$$;
+
 create or replace function public.parking_assign_role_by_email(
   p_email text,
   p_role text,
@@ -261,11 +290,18 @@ $$;
 revoke all on public.parking_vehicles, public.parking_washes, public.parking_services, public.parking_payments, public.parking_profiles from anon, authenticated;
 grant select, insert, update, delete on public.parking_vehicles, public.parking_washes, public.parking_services, public.parking_payments, public.parking_profiles to service_role;
 grant usage, select on all sequences in schema public to service_role;
+revoke execute on function public.parking_add_vehicle(text, text, text, text, text, bigint, boolean, integer) from public, anon, authenticated;
+revoke execute on function public.parking_record_wash(bigint, text, text, bigint, bigint, boolean) from public, anon, authenticated;
+revoke execute on function public.parking_collect_payment(bigint, bigint, text) from public, anon, authenticated;
+revoke execute on function public.parking_add_service(bigint, text, text, bigint, bigint, integer, text) from public, anon, authenticated;
+revoke execute on function public.parking_toggle_paid(bigint, boolean) from public, anon, authenticated;
+revoke execute on function public.parking_delete_wash(bigint) from public, anon, authenticated;
 grant execute on function public.parking_add_vehicle(text, text, text, text, text, bigint, boolean, integer) to service_role;
 grant execute on function public.parking_record_wash(bigint, text, text, bigint, bigint, boolean) to service_role;
 grant execute on function public.parking_collect_payment(bigint, bigint, text) to service_role;
 grant execute on function public.parking_add_service(bigint, text, text, bigint, bigint, integer, text) to service_role;
 grant execute on function public.parking_toggle_paid(bigint, boolean) to service_role;
+grant execute on function public.parking_delete_wash(bigint) to service_role;
 revoke execute on function public.parking_assign_role_by_email(text, text, text) from public, anon, authenticated;
 grant execute on function public.parking_assign_role_by_email(text, text, text) to service_role;
 
