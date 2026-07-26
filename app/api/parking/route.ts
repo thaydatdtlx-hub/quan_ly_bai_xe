@@ -24,6 +24,7 @@ function wash(row: Record<string, unknown>) {
     discount: Number(row.discount),
     finalAmount: Number(row.final_amount),
     usedCredit: Boolean(row.used_credit),
+    createdByName: String(row.created_by_name || ""),
     createdAt: String(row.created_at),
   };
 }
@@ -52,6 +53,18 @@ function payment(row: Record<string, unknown>) {
   };
 }
 
+function notification(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    type: String(row.type),
+    title: String(row.title),
+    body: String(row.body),
+    createdByName: String(row.created_by_name || ""),
+    isRead: Boolean(row.is_read),
+    createdAt: String(row.created_at),
+  };
+}
+
 function message(error: unknown) {
   const text = error instanceof Error ? error.message : "Đã có lỗi xảy ra.";
   if (text.includes("parking_vehicles_plate_key")) return "Biển số này đã có trong bãi.";
@@ -65,17 +78,22 @@ async function requireSession() {
 }
 
 async function adminData(session: ParkingSession) {
-  const [vehicles, washes, services, payments] = await Promise.all([
+  const notificationsRequest = adminRequest(
+    "parking_notifications?select=*&order=created_at.desc,id.desc&limit=100",
+  ).catch(() => []);
+  const [vehicles, washes, services, payments, notifications] = await Promise.all([
     adminRequest("parking_vehicles?select=*&order=id.desc"),
     adminRequest("parking_washes?select=*&order=created_at.desc,id.desc&limit=200"),
     adminRequest("parking_services?select=*&order=created_at.desc,id.desc&limit=200"),
     adminRequest("parking_payments?select=*&order=created_at.desc,id.desc&limit=200"),
-  ]) as [Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[]];
+    notificationsRequest,
+  ]) as [Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[]];
   return {
     vehicles: vehicles.map((row) => vehicle(row)),
     washes: washes.map(wash),
     services: services.map(service),
     payments: payments.map(payment),
+    notifications: notifications.map(notification),
     session,
   };
 }
@@ -90,6 +108,7 @@ async function staffData(session: ParkingSession) {
     washes: washes.map(wash),
     services: [],
     payments: [],
+    notifications: [],
     session,
   };
 }
@@ -114,6 +133,34 @@ export async function POST(request: Request) {
       return Response.json({ error: "Tài khoản nhân viên chỉ được ghi lượt rửa xe." }, { status: 403 });
     }
 
+    if (action === "recordWash") {
+      const body = {
+        p_vehicle_id: payload.vehicleId,
+        p_plate: payload.plate,
+        p_work_item: payload.workItem,
+        p_price: payload.price,
+        p_discount: payload.discount,
+        p_used_credit: payload.usedCredit,
+      };
+      try {
+        await adminRequest("rpc/parking_record_wash_v2", {
+          method: "POST",
+          body: JSON.stringify({ ...body, p_created_by: session.userId }),
+        });
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "";
+        const isMissingUpgrade = text.includes("parking_record_wash_v2") ||
+          text.includes("schema cache") ||
+          text.includes("PGRST202");
+        if (!isMissingUpgrade) throw error;
+        await adminRequest("rpc/parking_record_wash", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      }
+      return Response.json({ ok: true });
+    }
+
     const rpc: Record<string, { name: string; body: Record<string, unknown> }> = {
       addVehicle: {
         name: "parking_add_vehicle",
@@ -128,15 +175,24 @@ export async function POST(request: Request) {
           p_wash_credits: payload.washCredits,
         },
       },
-      recordWash: {
-        name: "parking_record_wash",
+      updateVehicle: {
+        name: "parking_update_vehicle",
         body: {
           p_vehicle_id: payload.vehicleId,
+          p_slot: payload.slot,
           p_plate: payload.plate,
-          p_work_item: payload.workItem,
-          p_price: payload.price,
-          p_discount: payload.discount,
-          p_used_credit: payload.usedCredit,
+          p_driver_name: payload.driverName,
+          p_phone: payload.phone,
+          p_vehicle_type: payload.vehicleType,
+          p_monthly_fee: payload.monthlyFee,
+          p_month_paid: payload.monthPaid,
+          p_wash_credits: payload.washCredits,
+        },
+      },
+      deleteVehicle: {
+        name: "parking_delete_vehicle",
+        body: {
+          p_vehicle_id: payload.vehicleId,
         },
       },
       deleteWash: {
@@ -171,6 +227,10 @@ export async function POST(request: Request) {
           p_vehicle_id: payload.vehicleId,
           p_month_paid: payload.monthPaid,
         },
+      },
+      markNotificationsRead: {
+        name: "parking_mark_notifications_read",
+        body: {},
       },
     };
     const selected = rpc[action];

@@ -46,8 +46,21 @@ select public.parking_assign_role_by_email('nhanvien2@parking.local', 'staff_was
 
 Admin được quản lý toàn bộ dữ liệu. Nhân viên chỉ thấy thông tin xe cần cho
 việc rửa xe và chỉ được ghi lượt rửa; API phía máy chủ cũng chặn các thao tác
-quản trị. Admin có thể xóa lượt rửa nhập sai; nếu lượt đó đã dùng lượt rửa tặng,
-hệ thống tự hoàn lại một lượt cho xe.
+quản trị.
+
+Các chức năng dành riêng cho admin:
+
+- Thêm, chỉnh sửa và xóa xe trong bãi. Khi xóa xe, lịch sử rửa, dịch vụ và
+  thanh toán vẫn được giữ lại.
+- Xóa lượt rửa nhập sai; nếu lượt đó đã dùng lượt rửa tặng, hệ thống tự hoàn
+  lại một lượt cho xe.
+- Nhận thông báo khi tài khoản nhân viên ghi một lượt rửa mới.
+- Lọc lượt rửa, dịch vụ, thanh toán và doanh thu theo tháng.
+- Xuất dữ liệu đang lọc thành file Excel `.xlsx` gồm nhiều trang dữ liệu.
+
+Sau mỗi lần cập nhật repository có thay đổi trong `supabase/parking.sql`, hãy
+chạy lại toàn bộ file trong SQL Editor. Các câu lệnh được thiết kế để nâng cấp
+cơ sở dữ liệu hiện có mà không xóa dữ liệu cũ.
 
 ## Triển khai Vercel
 

@@ -23,6 +23,7 @@ type Wash = {
   discount: number;
   finalAmount: number;
   usedCredit: boolean;
+  createdByName: string;
   createdAt: string;
 };
 
@@ -46,6 +47,16 @@ type Payment = {
   createdAt: string;
 };
 
+type Notification = {
+  id: number;
+  type: string;
+  title: string;
+  body: string;
+  createdByName: string;
+  isRead: boolean;
+  createdAt: string;
+};
+
 type Session = {
   userId: string;
   email: string;
@@ -58,6 +69,7 @@ type Data = {
   washes: Wash[];
   services: Service[];
   payments: Payment[];
+  notifications: Notification[];
   session?: Session;
 };
 type View = "overview" | "vehicles" | "washes" | "services" | "finance";
@@ -66,6 +78,15 @@ type Modal = "vehicle" | "wash" | "payment" | "service" | null;
 const money = (value: number) => new Intl.NumberFormat("vi-VN").format(value) + "đ";
 const time = (value: string) => new Date(value).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 const date = (value: string) => new Date(value).toLocaleDateString("vi-VN");
+const currentMonth = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+};
+const monthKey = (value: string) => {
+  const item = new Date(value);
+  return `${item.getFullYear()}-${String(item.getMonth() + 1).padStart(2, "0")}`;
+};
+const safeCell = (value: string) => /^[=+\-@]/.test(value) ? `'${value}` : value;
 
 const navItems: { id: View; label: string; icon: string }[] = [
   { id: "overview", label: "Tổng quan", icon: "▦" },
@@ -75,7 +96,7 @@ const navItems: { id: View; label: string; icon: string }[] = [
   { id: "finance", label: "Thu chi", icon: "₫" },
 ];
 
-const initialData: Data = { vehicles: [], washes: [], services: [], payments: [] };
+const initialData: Data = { vehicles: [], washes: [], services: [], payments: [], notifications: [] };
 
 export default function ParkingManager() {
   const [data, setData] = useState<Data>(initialData);
@@ -86,6 +107,10 @@ export default function ParkingManager() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [monthFilter, setMonthFilter] = useState(currentMonth);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -151,6 +176,7 @@ export default function ParkingManager() {
       }
       if (!response.ok) throw new Error(result.error || "Không thể lưu dữ liệu.");
       setModal(null);
+      setEditingVehicle(null);
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Không thể lưu dữ liệu.");
@@ -169,13 +195,24 @@ export default function ParkingManager() {
     );
   }, [data.vehicles, search]);
 
+  const filteredData = useMemo<Data>(() => {
+    const keep = (createdAt: string) => !monthFilter || monthKey(createdAt) === monthFilter;
+    return {
+      ...data,
+      washes: data.washes.filter((item) => keep(item.createdAt)),
+      services: data.services.filter((item) => keep(item.createdAt)),
+      payments: data.payments.filter((item) => keep(item.createdAt)),
+    };
+  }, [data, monthFilter]);
+
   const unpaid = data.vehicles.filter((vehicle) => !vehicle.monthPaid);
   const totalIncome =
-    data.washes.reduce((sum, item) => sum + item.finalAmount, 0) +
-    data.services.reduce((sum, item) => sum + item.finalAmount, 0) +
-    data.payments.reduce((sum, item) => sum + item.amount, 0);
-  const washesToday = data.washes.filter((item) => date(item.createdAt) === date(new Date().toISOString())).length;
+    filteredData.washes.reduce((sum, item) => sum + item.finalAmount, 0) +
+    filteredData.services.reduce((sum, item) => sum + item.finalAmount, 0) +
+    filteredData.payments.reduce((sum, item) => sum + item.amount, 0);
+  const washesToday = filteredData.washes.filter((item) => date(item.createdAt) === date(new Date().toISOString())).length;
   const isAdmin = data.session?.role === "admin";
+  const unreadNotifications = data.notifications.filter((item) => !item.isRead).length;
   const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.id === "washes");
   const accountInitial = data.session?.fullName.trim().charAt(0).toLocaleUpperCase("vi") || "U";
 
@@ -185,6 +222,72 @@ export default function ParkingManager() {
     setModal(null);
     setView("overview");
     setAuthRequired(true);
+  }
+
+  async function exportData() {
+    if (!isAdmin || exporting) return;
+    setExporting(true);
+    setError("");
+    try {
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.utils.book_new();
+      const addSheet = (name: string, rows: Record<string, string | number>[], widths: number[]) => {
+        const sheet = XLSX.utils.json_to_sheet(rows);
+        sheet["!cols"] = widths.map((wch) => ({ wch }));
+        XLSX.utils.book_append_sheet(workbook, sheet, name);
+      };
+      addSheet("Tổng quan", [
+        { "Chỉ số": "Tháng dữ liệu", "Giá trị": monthFilter || "Tất cả" },
+        { "Chỉ số": "Tổng xe trong bãi", "Giá trị": data.vehicles.length },
+        { "Chỉ số": "Xe chưa đóng tháng", "Giá trị": unpaid.length },
+        { "Chỉ số": "Số lượt rửa", "Giá trị": filteredData.washes.length },
+        { "Chỉ số": "Tổng doanh thu", "Giá trị": totalIncome },
+      ], [28, 22]);
+      addSheet("Xe trong bãi", data.vehicles.map((item) => ({
+        "Ô đỗ": safeCell(item.slot),
+        "Biển số": safeCell(item.plate),
+        "Tên lái xe": safeCell(item.driverName),
+        "Số điện thoại": safeCell(item.phone),
+        "Loại xe": safeCell(item.vehicleType),
+        "Tiền tháng": item.monthlyFee,
+        "Đã đóng": item.monthPaid ? "Có" : "Chưa",
+        "Lượt rửa còn": item.washCredits,
+        "Ngày vào": date(item.createdAt),
+      })), [12, 18, 24, 18, 15, 16, 12, 15, 14]);
+      addSheet("Lượt rửa", filteredData.washes.map((item) => ({
+        "Ngày": date(item.createdAt),
+        "Giờ": time(item.createdAt),
+        "Biển số": safeCell(item.plate),
+        "Hạng mục": safeCell(item.workItem),
+        "Giá": item.price,
+        "Giảm giá": item.discount,
+        "Thành tiền": item.finalAmount,
+        "Dùng lượt tặng": item.usedCredit ? "Có" : "Không",
+        "Người nhập": safeCell(item.createdByName || "Không xác định"),
+      })), [14, 10, 18, 24, 15, 15, 16, 16, 24]);
+      addSheet("Dịch vụ", filteredData.services.map((item) => ({
+        "Ngày": date(item.createdAt),
+        "Biển số": safeCell(item.plate),
+        "Dịch vụ": safeCell(item.serviceName),
+        "Giá": item.price,
+        "Giảm giá": item.discount,
+        "Thành tiền": item.finalAmount,
+        "Lượt rửa tặng": item.bonusWashes,
+        "Ghi chú": safeCell(item.note),
+      })), [14, 18, 28, 15, 15, 16, 16, 32]);
+      addSheet("Thanh toán", filteredData.payments.map((item) => ({
+        "Ngày": date(item.createdAt),
+        "Giờ": time(item.createdAt),
+        "Biển số": safeCell(item.plate),
+        "Loại thanh toán": safeCell(item.paymentType),
+        "Số tiền": item.amount,
+      })), [14, 10, 18, 24, 18]);
+      XLSX.writeFile(workbook, `bai-xe-minh-phuc-${monthFilter || "tat-ca"}.xlsx`, { compression: true });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Không thể xuất file Excel.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   if (authRequired) {
@@ -210,12 +313,33 @@ export default function ParkingManager() {
         </nav>
         <div className="header-actions">
           <button className="icon-button" onClick={() => void load()} aria-label="Tải lại dữ liệu">↻</button>
+          {isAdmin && (
+            <div className="notification-wrap">
+              <button
+                className={notificationOpen ? "icon-button notification-button active" : "icon-button notification-button"}
+                onClick={() => setNotificationOpen((current) => !current)}
+                aria-label={`Thông báo, ${unreadNotifications} chưa đọc`}
+                aria-expanded={notificationOpen}
+              >
+                🔔
+                {unreadNotifications > 0 && <span>{unreadNotifications > 99 ? "99+" : unreadNotifications}</span>}
+              </button>
+              {notificationOpen && (
+                <NotificationPanel
+                  notifications={data.notifications}
+                  saving={saving}
+                  onClose={() => setNotificationOpen(false)}
+                  onMarkAll={() => void submit({ action: "markNotificationsRead" })}
+                />
+              )}
+            </div>
+          )}
           <div className="account-block">
             <div className="avatar" aria-label={`Tài khoản ${data.session?.fullName}`}>{accountInitial}</div>
             <span><strong>{data.session?.fullName}</strong><small>{isAdmin ? "Quản trị viên" : "Nhân viên rửa xe"}</small></span>
           </div>
           <button className="logout-button" onClick={() => void logout()}>Đăng xuất</button>
-          {isAdmin && <button className="header-primary" onClick={() => setModal("vehicle")}><span>＋</span> Thêm xe mới</button>}
+          {isAdmin && <button className="header-primary" onClick={() => { setEditingVehicle(null); setModal("vehicle"); }}><span>＋</span> Thêm xe mới</button>}
         </div>
       </header>
 
@@ -229,12 +353,26 @@ export default function ParkingManager() {
           </header>
         )}
 
+        {isAdmin && (
+          <section className="data-controls" aria-label="Bộ lọc và xuất dữ liệu">
+            <div>
+              <label htmlFor="month-filter">Lọc dữ liệu theo tháng</label>
+              <input id="month-filter" type="month" value={monthFilter} onChange={(event) => setMonthFilter(event.target.value)} />
+              <button type="button" onClick={() => setMonthFilter("")} className={!monthFilter ? "active" : ""}>Tất cả thời gian</button>
+            </div>
+            <span>{monthFilter ? `Đang xem tháng ${monthFilter.slice(5)}/${monthFilter.slice(0, 4)}` : "Đang xem toàn bộ dữ liệu"}</span>
+            <button className="export-button" type="button" disabled={exporting} onClick={() => void exportData()}>
+              {exporting ? "ĐANG XUẤT…" : "⇩ XUẤT DATA (.XLSX)"}
+            </button>
+          </section>
+        )}
+
         {error && <div className="alert" role="alert"><span>!</span><p>{error}</p><button onClick={() => setError("")}>×</button></div>}
         {loading ? <LoadingState /> : (
           <>
             {isAdmin && view === "overview" && (
               <Overview
-                data={data}
+                data={filteredData}
                 unpaid={unpaid}
                 washesToday={washesToday}
                 totalIncome={totalIncome}
@@ -247,14 +385,22 @@ export default function ParkingManager() {
                 vehicles={filteredVehicles}
                 search={search}
                 setSearch={setSearch}
-                onAdd={() => setModal("vehicle")}
+                onAdd={() => { setEditingVehicle(null); setModal("vehicle"); }}
                 onCollect={(id) => { sessionStorage.setItem("selectedVehicle", String(id)); setModal("payment"); }}
                 togglePaid={(vehicle) => void submit({ action: "togglePaid", vehicleId: vehicle.id, monthPaid: !vehicle.monthPaid })}
+                onEdit={(vehicle) => { setEditingVehicle(vehicle); setModal("vehicle"); }}
+                onDelete={(vehicle) => {
+                  const confirmed = window.confirm(
+                    `Xóa xe ${vehicle.plate} khỏi danh sách bãi? Lịch sử rửa, dịch vụ và thanh toán vẫn được giữ lại.`
+                  );
+                  if (confirmed) void submit({ action: "deleteVehicle", vehicleId: vehicle.id });
+                }}
+                deleting={saving}
               />
             )}
             {view === "washes" && (
               <WashesView
-                washes={data.washes}
+                washes={isAdmin ? filteredData.washes : data.washes}
                 onAdd={() => setModal("wash")}
                 canDelete={isAdmin}
                 deleting={saving}
@@ -266,8 +412,8 @@ export default function ParkingManager() {
                 }}
               />
             )}
-            {isAdmin && view === "services" && <ServicesView services={data.services} onAdd={() => setModal("service")} />}
-            {isAdmin && view === "finance" && <FinanceView data={data} total={totalIncome} />}
+            {isAdmin && view === "services" && <ServicesView services={filteredData.services} onAdd={() => setModal("service")} />}
+            {isAdmin && view === "finance" && <FinanceView data={filteredData} total={totalIncome} />}
           </>
         )}
       </main>
@@ -281,8 +427,8 @@ export default function ParkingManager() {
       </nav>
 
       {modal && (isAdmin || modal === "wash") && (
-        <ModalShell title={{ vehicle: "Thêm xe vào bãi", wash: "Ghi lượt rửa xe", payment: "Thu tiền tháng", service: "Thêm dịch vụ thuê" }[modal]} onClose={() => setModal(null)}>
-          {modal === "vehicle" && <VehicleForm saving={saving} onSubmit={submit} />}
+        <ModalShell title={modal === "vehicle" && editingVehicle ? "Chỉnh sửa thông tin xe" : { vehicle: "Thêm xe vào bãi", wash: "Ghi lượt rửa xe", payment: "Thu tiền tháng", service: "Thêm dịch vụ thuê" }[modal]} onClose={() => { setModal(null); setEditingVehicle(null); }}>
+          {modal === "vehicle" && <VehicleForm vehicle={editingVehicle} saving={saving} onSubmit={submit} />}
           {modal === "wash" && <WashForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
           {modal === "payment" && <PaymentForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
           {modal === "service" && <ServiceForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
@@ -344,6 +490,38 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
 
 function LoadingState() {
   return <div className="loading-grid" aria-label="Đang tải dữ liệu">{Array.from({ length: 8 }).map((_, index) => <div key={index} />)}</div>;
+}
+
+function NotificationPanel({ notifications, saving, onClose, onMarkAll }: {
+  notifications: Notification[];
+  saving: boolean;
+  onClose: () => void;
+  onMarkAll: () => void;
+}) {
+  return (
+    <section className="notification-panel" aria-label="Trung tâm thông báo">
+      <header>
+        <div><small>TRUNG TÂM THÔNG BÁO</small><strong>Hoạt động nhân viên</strong></div>
+        <button type="button" onClick={onClose} aria-label="Đóng thông báo">×</button>
+      </header>
+      <div className="notification-list">
+        {notifications.map((item) => (
+          <article className={item.isRead ? "notification-item" : "notification-item unread"} key={item.id}>
+            <span className="notification-dot" />
+            <div>
+              <strong>{item.title}</strong>
+              <p>{item.body}</p>
+              <small>{date(item.createdAt)} · {time(item.createdAt)}</small>
+            </div>
+          </article>
+        ))}
+        {!notifications.length && <Empty text="Chưa có hoạt động mới từ nhân viên." />}
+      </div>
+      {notifications.some((item) => !item.isRead) && (
+        <footer><button type="button" disabled={saving} onClick={onMarkAll}>{saving ? "Đang cập nhật…" : "Đánh dấu tất cả đã đọc"}</button></footer>
+      )}
+    </section>
+  );
 }
 
 function Overview({ data, unpaid, washesToday, totalIncome, setView, openModal }: {
@@ -433,8 +611,16 @@ function PageHeading({ eyebrow, title, description, action, actionLabel }: { eye
   return <div className="page-heading"><div><small>{eyebrow}</small><h2>{title}</h2><p>{description}</p></div>{action && <button className="primary-button" onClick={action}>＋ {actionLabel}</button>}</div>;
 }
 
-function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePaid }: {
-  vehicles: Vehicle[]; search: string; setSearch: (value: string) => void; onAdd: () => void; onCollect: (id: number) => void; togglePaid: (vehicle: Vehicle) => void;
+function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePaid, onEdit, onDelete, deleting }: {
+  vehicles: Vehicle[];
+  search: string;
+  setSearch: (value: string) => void;
+  onAdd: () => void;
+  onCollect: (id: number) => void;
+  togglePaid: (vehicle: Vehicle) => void;
+  onEdit: (vehicle: Vehicle) => void;
+  onDelete: (vehicle: Vehicle) => void;
+  deleting: boolean;
 }) {
   return (
     <section className="page-section">
@@ -454,6 +640,10 @@ function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePai
               {!vehicle.monthPaid && <button className="collect" onClick={() => onCollect(vehicle.id)}>Thu tiền</button>}
               <button onClick={() => togglePaid(vehicle)}>{vehicle.monthPaid ? "Đánh dấu chưa đóng" : "Đánh dấu đã đóng"}</button>
             </footer>
+            <div className="vehicle-admin-actions">
+              <button type="button" onClick={() => onEdit(vehicle)}>✎ Chỉnh sửa</button>
+              <button className="danger" type="button" disabled={deleting} onClick={() => onDelete(vehicle)}>× Xóa xe</button>
+            </div>
           </article>
         ))}
         {!vehicles.length && <Empty text="Không tìm thấy xe phù hợp." />}
@@ -474,12 +664,13 @@ function WashesView({ washes, onAdd, canDelete, deleting, onDelete }: {
       <PageHeading eyebrow="NHẬT KÝ CÔNG VIỆC" title="Lượt rửa xe" description="Theo dõi hạng mục, giá gốc, giảm giá và số tiền thực thu." action={onAdd} actionLabel="Ghi lượt rửa" />
       <div className="detail-card">
         <div className="table-wrap">
-          <table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Hạng mục</th><th>Giá</th><th>Giảm giá</th><th>Thành tiền</th>{canDelete && <th>Thao tác</th>}</tr></thead>
+          <table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Hạng mục</th><th>Người nhập</th><th>Giá</th><th>Giảm giá</th><th>Thành tiền</th>{canDelete && <th>Thao tác</th>}</tr></thead>
             <tbody>{washes.map((item) => (
               <tr key={item.id}>
                 <td>{date(item.createdAt)} · {time(item.createdAt)}</td>
                 <td><strong>{item.plate}</strong></td>
                 <td>{item.workItem}{item.usedCredit && <span className="mini-note">Dùng lượt tặng</span>}</td>
+                <td>{item.createdByName || "Không xác định"}</td>
                 <td>{money(item.price)}</td>
                 <td>{money(item.discount)}</td>
                 <td><strong className="amount">{money(item.finalAmount)}</strong></td>
@@ -534,13 +725,13 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-handle" /><header><div><small>GHI NHẬN NHANH</small><h2>{title}</h2></div><button onClick={onClose} aria-label="Đóng">×</button></header>{children}</section></div>;
 }
 
-function VehicleForm({ saving, onSubmit }: { saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
+function VehicleForm({ vehicle, saving, onSubmit }: { vehicle: Vehicle | null; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
   function handle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    void onSubmit({ action: "addVehicle", slot: form.get("slot"), plate: form.get("plate"), driverName: form.get("driverName"), phone: form.get("phone"), vehicleType: form.get("vehicleType"), monthlyFee: form.get("monthlyFee"), washCredits: form.get("washCredits"), monthPaid: form.get("monthPaid") === "on" });
+    void onSubmit({ action: vehicle ? "updateVehicle" : "addVehicle", vehicleId: vehicle?.id, slot: form.get("slot"), plate: form.get("plate"), driverName: form.get("driverName"), phone: form.get("phone"), vehicleType: form.get("vehicleType"), monthlyFee: form.get("monthlyFee"), washCredits: form.get("washCredits"), monthPaid: form.get("monthPaid") === "on" });
   }
-  return <form onSubmit={handle} className="form-grid"><Field label="Ô đỗ" name="slot" placeholder="A01" required /><Field label="Biển số xe" name="plate" placeholder="51H-123.45" required /><Field label="Tên lái xe" name="driverName" placeholder="Nguyễn Văn A" required /><Field label="Số điện thoại" name="phone" placeholder="0901 234 567" required /><SelectField label="Loại xe" name="vehicleType" options={["Ô tô", "Xe máy", "Xe tải", "Xe khách"]} /><Field label="Tiền gửi mỗi tháng" name="monthlyFee" type="number" defaultValue="1200000" required /><Field label="Số lượt rửa có sẵn" name="washCredits" type="number" defaultValue="0" /><label className="check-field"><input type="checkbox" name="monthPaid" /><span>Xe đã đóng tiền tháng này</span></label><SubmitButton saving={saving} label="Lưu xe vào bãi" /></form>;
+  return <form onSubmit={handle} className="form-grid"><Field label="Ô đỗ" name="slot" placeholder="A01" defaultValue={vehicle?.slot} required /><Field label="Biển số xe" name="plate" placeholder="51H-123.45" defaultValue={vehicle?.plate} required /><Field label="Tên lái xe" name="driverName" placeholder="Nguyễn Văn A" defaultValue={vehicle?.driverName} required /><Field label="Số điện thoại" name="phone" placeholder="0901 234 567" defaultValue={vehicle?.phone} required /><SelectField label="Loại xe" name="vehicleType" options={["Ô tô", "Xe máy", "Xe tải", "Xe khách"]} defaultValue={vehicle?.vehicleType} /><Field label="Tiền gửi mỗi tháng" name="monthlyFee" type="number" defaultValue={String(vehicle?.monthlyFee ?? 1200000)} required /><Field label="Số lượt rửa có sẵn" name="washCredits" type="number" defaultValue={String(vehicle?.washCredits ?? 0)} /><label className="check-field"><input type="checkbox" name="monthPaid" defaultChecked={vehicle?.monthPaid} /><span>Xe đã đóng tiền tháng này</span></label><SubmitButton saving={saving} label={vehicle ? "Lưu thay đổi" : "Lưu xe vào bãi"} /></form>;
 }
 
 function WashForm({ vehicles, saving, onSubmit }: { vehicles: Vehicle[]; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
@@ -582,8 +773,8 @@ function Field({ label, name, type = "text", placeholder, defaultValue, required
   return <label className={`field ${className}`}><span>{label}</span><input name={name} type={type} placeholder={placeholder} defaultValue={value === undefined ? defaultValue : undefined} value={value} onChange={onChange ? (event) => onChange(event.target.value) : undefined} required={required} min={type === "number" ? 0 : undefined} /></label>;
 }
 
-function SelectField({ label, name, options }: { label: string; name: string; options: string[] }) {
-  return <label className="field"><span>{label}</span><select name={name}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+function SelectField({ label, name, options, defaultValue }: { label: string; name: string; options: string[]; defaultValue?: string }) {
+  return <label className="field"><span>{label}</span><select name={name} defaultValue={defaultValue}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
 }
 
 function SubmitButton({ saving, label }: { saving: boolean; label: string }) {
