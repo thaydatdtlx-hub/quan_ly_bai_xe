@@ -17,6 +17,7 @@ type Vehicle = {
 
 type Wash = {
   id: number;
+  vehicleId: number;
   plate: string;
   workItem: string;
   price: number;
@@ -29,6 +30,7 @@ type Wash = {
 
 type Service = {
   id: number;
+  vehicleId: number;
   plate: string;
   serviceName: string;
   price: number;
@@ -41,9 +43,11 @@ type Service = {
 
 type Payment = {
   id: number;
+  vehicleId: number;
   plate: string;
   amount: number;
   paymentType: string;
+  note: string;
   createdAt: string;
 };
 
@@ -113,6 +117,9 @@ export default function ParkingManager() {
   const [notificationReadAt, setNotificationReadAt] = useState("");
   const [highlightedWashId, setHighlightedWashId] = useState<number | null>(null);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [editingWash, setEditingWash] = useState<Wash | null>(null);
+  const [editingService, setEditingService] = useState<Service | null>(null);
+  const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [exporting, setExporting] = useState(false);
 
   async function load() {
@@ -218,6 +225,9 @@ export default function ParkingManager() {
       if (!response.ok) throw new Error(result.error || "Không thể lưu dữ liệu.");
       setModal(null);
       setEditingVehicle(null);
+      setEditingWash(null);
+      setEditingService(null);
+      setEditingPayment(null);
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Không thể lưu dữ liệu.");
@@ -263,11 +273,24 @@ export default function ParkingManager() {
   const unreadNotifications = visibleNotifications.filter((item) => !item.isRead).length;
   const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.id === "washes");
   const accountInitial = data.session?.fullName.trim().charAt(0).toLocaleUpperCase("vi") || "U";
+  const modalTitle = modal === "vehicle"
+    ? (editingVehicle ? "Chỉnh sửa thông tin xe" : "Thêm xe vào bãi")
+    : modal === "wash"
+      ? (editingWash ? "Chỉnh sửa lượt rửa" : "Ghi lượt rửa xe")
+      : modal === "payment"
+        ? (editingPayment ? "Chỉnh sửa khoản thu" : "Thu tiền tháng")
+        : modal === "service"
+          ? (editingService ? "Chỉnh sửa dịch vụ" : "Thêm dịch vụ thuê")
+          : "";
 
   async function logout() {
     await fetch("/api/auth", { method: "DELETE" });
     setData(initialData);
     setModal(null);
+    setEditingVehicle(null);
+    setEditingWash(null);
+    setEditingService(null);
+    setEditingPayment(null);
     setView("overview");
     setAuthRequired(true);
   }
@@ -291,6 +314,59 @@ export default function ParkingManager() {
     setMonthFilter(monthKey(item.createdAt));
     setView("washes");
     if (item.sourceId) setHighlightedWashId(item.sourceId);
+  }
+
+  function openNewModal(nextModal: Exclude<Modal, null>) {
+    setEditingVehicle(null);
+    setEditingWash(null);
+    setEditingService(null);
+    setEditingPayment(null);
+    setModal(nextModal);
+  }
+
+  function editFinanceItem(kind: "payment" | "wash" | "service", id: number) {
+    if (kind === "payment") {
+      const item = data.payments.find((payment) => payment.id === id);
+      if (item) {
+        setEditingPayment(item);
+        setModal("payment");
+      }
+      return;
+    }
+    if (kind === "wash") {
+      const item = data.washes.find((washItem) => washItem.id === id);
+      if (item) {
+        setEditingWash(item);
+        setModal("wash");
+      }
+      return;
+    }
+    const item = data.services.find((serviceItem) => serviceItem.id === id);
+    if (item) {
+      setEditingService(item);
+      setModal("service");
+    }
+  }
+
+  function deleteFinanceItem(kind: "payment" | "wash" | "service", id: number) {
+    if (kind === "payment") {
+      const item = data.payments.find((payment) => payment.id === id);
+      if (item && window.confirm(`Xóa khoản thu ${money(item.amount)} của xe ${item.plate}?`)) {
+        void submit({ action: "deletePayment", paymentId: item.id });
+      }
+      return;
+    }
+    if (kind === "wash") {
+      const item = data.washes.find((washItem) => washItem.id === id);
+      if (item && window.confirm(`Xóa lượt rửa ${item.workItem} của xe ${item.plate}?`)) {
+        void submit({ action: "deleteWash", washId: item.id });
+      }
+      return;
+    }
+    const item = data.services.find((serviceItem) => serviceItem.id === id);
+    if (item && window.confirm(`Xóa dịch vụ ${item.serviceName} của xe ${item.plate}?`)) {
+      void submit({ action: "deleteService", serviceId: item.id });
+    }
   }
 
   async function exportData() {
@@ -447,7 +523,7 @@ export default function ParkingManager() {
                 washesToday={washesToday}
                 totalIncome={totalIncome}
                 setView={setView}
-                openModal={setModal}
+                openModal={openNewModal}
               />
             )}
             {isAdmin && view === "vehicles" && (
@@ -456,7 +532,7 @@ export default function ParkingManager() {
                 search={search}
                 setSearch={setSearch}
                 onAdd={() => { setEditingVehicle(null); setModal("vehicle"); }}
-                onCollect={(id) => { sessionStorage.setItem("selectedVehicle", String(id)); setModal("payment"); }}
+                onCollect={(id) => { sessionStorage.setItem("selectedVehicle", String(id)); openNewModal("payment"); }}
                 togglePaid={(vehicle) => void submit({ action: "togglePaid", vehicleId: vehicle.id, monthPaid: !vehicle.monthPaid })}
                 onEdit={(vehicle) => { setEditingVehicle(vehicle); setModal("vehicle"); }}
                 onDelete={(vehicle) => {
@@ -471,10 +547,14 @@ export default function ParkingManager() {
             {view === "washes" && (
               <WashesView
                 washes={isAdmin ? filteredData.washes : data.washes}
-                onAdd={() => setModal("wash")}
+                onAdd={() => openNewModal("wash")}
                 canDelete={isAdmin}
                 deleting={saving}
                 highlightedWashId={highlightedWashId}
+                onEdit={(washItem) => {
+                  setEditingWash(washItem);
+                  setModal("wash");
+                }}
                 onDelete={(wash) => {
                   const confirmed = window.confirm(
                     `Xóa lượt rửa ${wash.workItem} của xe ${wash.plate}? Hành động này không thể hoàn tác.`
@@ -483,8 +563,31 @@ export default function ParkingManager() {
                 }}
               />
             )}
-            {isAdmin && view === "services" && <ServicesView services={filteredData.services} onAdd={() => setModal("service")} />}
-            {isAdmin && view === "finance" && <FinanceView data={filteredData} total={totalIncome} />}
+            {isAdmin && view === "services" && (
+              <ServicesView
+                services={filteredData.services}
+                onAdd={() => openNewModal("service")}
+                onEdit={(serviceItem) => {
+                  setEditingService(serviceItem);
+                  setModal("service");
+                }}
+                onDelete={(serviceItem) => {
+                  if (window.confirm(`Xóa dịch vụ ${serviceItem.serviceName} của xe ${serviceItem.plate}?`)) {
+                    void submit({ action: "deleteService", serviceId: serviceItem.id });
+                  }
+                }}
+                deleting={saving}
+              />
+            )}
+            {isAdmin && view === "finance" && (
+              <FinanceView
+                data={filteredData}
+                total={totalIncome}
+                deleting={saving}
+                onEdit={editFinanceItem}
+                onDelete={deleteFinanceItem}
+              />
+            )}
           </>
         )}
       </main>
@@ -498,11 +601,17 @@ export default function ParkingManager() {
       </nav>
 
       {modal && (isAdmin || modal === "wash") && (
-        <ModalShell title={modal === "vehicle" && editingVehicle ? "Chỉnh sửa thông tin xe" : { vehicle: "Thêm xe vào bãi", wash: "Ghi lượt rửa xe", payment: "Thu tiền tháng", service: "Thêm dịch vụ thuê" }[modal]} onClose={() => { setModal(null); setEditingVehicle(null); }}>
+        <ModalShell title={modalTitle} onClose={() => {
+          setModal(null);
+          setEditingVehicle(null);
+          setEditingWash(null);
+          setEditingService(null);
+          setEditingPayment(null);
+        }}>
           {modal === "vehicle" && <VehicleForm vehicle={editingVehicle} saving={saving} onSubmit={submit} />}
-          {modal === "wash" && <WashForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
-          {modal === "payment" && <PaymentForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
-          {modal === "service" && <ServiceForm vehicles={data.vehicles} saving={saving} onSubmit={submit} />}
+          {modal === "wash" && <WashForm vehicles={data.vehicles} wash={editingWash} saving={saving} onSubmit={submit} />}
+          {modal === "payment" && <PaymentForm vehicles={data.vehicles} payment={editingPayment} saving={saving} onSubmit={submit} />}
+          {modal === "service" && <ServiceForm vehicles={data.vehicles} service={editingService} saving={saving} onSubmit={submit} />}
         </ModalShell>
       )}
     </div>
@@ -602,7 +711,7 @@ function NotificationPanel({ notifications, saving, onClose, onMarkAll, onSelect
 }
 
 function Overview({ data, unpaid, washesToday, totalIncome, setView, openModal }: {
-  data: Data; unpaid: Vehicle[]; washesToday: number; totalIncome: number; setView: (view: View) => void; openModal: (modal: Modal) => void;
+  data: Data; unpaid: Vehicle[]; washesToday: number; totalIncome: number; setView: (view: View) => void; openModal: (modal: Exclude<Modal, null>) => void;
 }) {
   const occupied = data.vehicles.length;
   const paid = Math.max(0, occupied - unpaid.length);
@@ -729,12 +838,13 @@ function VehiclesView({ vehicles, search, setSearch, onAdd, onCollect, togglePai
   );
 }
 
-function WashesView({ washes, onAdd, canDelete, deleting, highlightedWashId, onDelete }: {
+function WashesView({ washes, onAdd, canDelete, deleting, highlightedWashId, onEdit, onDelete }: {
   washes: Wash[];
   onAdd: () => void;
   canDelete: boolean;
   deleting: boolean;
   highlightedWashId: number | null;
+  onEdit: (wash: Wash) => void;
   onDelete: (wash: Wash) => void;
 }) {
   return (
@@ -752,7 +862,7 @@ function WashesView({ washes, onAdd, canDelete, deleting, highlightedWashId, onD
                 <td>{money(item.price)}</td>
                 <td>{money(item.discount)}</td>
                 <td><strong className="amount">{money(item.finalAmount)}</strong></td>
-                {canDelete && <td><button className="delete-button" type="button" disabled={deleting} onClick={() => onDelete(item)}>Xóa</button></td>}
+                {canDelete && <td><div className="record-actions"><button className="edit-button" type="button" disabled={deleting} onClick={() => onEdit(item)}>Chỉnh sửa</button><button className="delete-button" type="button" disabled={deleting} onClick={() => onDelete(item)}>Xóa</button></div></td>}
               </tr>
             ))}</tbody>
           </table>
@@ -763,29 +873,41 @@ function WashesView({ washes, onAdd, canDelete, deleting, highlightedWashId, onD
   );
 }
 
-function ServicesView({ services, onAdd }: { services: Service[]; onAdd: () => void }) {
+function ServicesView({ services, onAdd, onEdit, onDelete, deleting }: {
+  services: Service[];
+  onAdd: () => void;
+  onEdit: (service: Service) => void;
+  onDelete: (service: Service) => void;
+  deleting: boolean;
+}) {
   return (
     <section className="page-section">
       <PageHeading eyebrow="DỊCH VỤ THUÊ" title="Dịch vụ cho xe" description="Quản lý tiền dịch vụ, chiết khấu, giảm giá và lượt rửa tặng kèm." action={onAdd} actionLabel="Thêm dịch vụ" />
       <div className="service-grid">
-        {services.map((item) => <article className="service-card" key={item.id}><header><span>▣</span><small>{date(item.createdAt)}</small></header><h3>{item.serviceName}</h3><p>{item.plate}</p><dl><div><dt>Giá dịch vụ</dt><dd>{money(item.price)}</dd></div><div><dt>Chiết khấu</dt><dd>-{money(item.discount)}</dd></div><div className="total"><dt>Thực thu</dt><dd>{money(item.finalAmount)}</dd></div></dl>{item.bonusWashes > 0 && <div className="bonus">＋ Tặng {item.bonusWashes} lượt rửa</div>}{item.note && <small className="note">{item.note}</small>}</article>)}
+        {services.map((item) => <article className="service-card" key={item.id}><header><span>▣</span><small>{date(item.createdAt)}</small></header><h3>{item.serviceName}</h3><p>{item.plate}</p><dl><div><dt>Giá dịch vụ</dt><dd>{money(item.price)}</dd></div><div><dt>Chiết khấu</dt><dd>-{money(item.discount)}</dd></div><div className="total"><dt>Thực thu</dt><dd>{money(item.finalAmount)}</dd></div></dl>{item.bonusWashes > 0 && <div className="bonus">＋ Tặng {item.bonusWashes} lượt rửa</div>}{item.note && <small className="note">{item.note}</small>}<div className="record-actions service-actions"><button className="edit-button" type="button" disabled={deleting} onClick={() => onEdit(item)}>✎ Chỉnh sửa</button><button className="delete-button" type="button" disabled={deleting} onClick={() => onDelete(item)}>× Xóa</button></div></article>)}
         {!services.length && <Empty text="Chưa có dịch vụ thuê nào. Hãy thêm dịch vụ đầu tiên." />}
       </div>
     </section>
   );
 }
 
-function FinanceView({ data, total }: { data: Data; total: number }) {
+function FinanceView({ data, total, deleting, onEdit, onDelete }: {
+  data: Data;
+  total: number;
+  deleting: boolean;
+  onEdit: (kind: "payment" | "wash" | "service", id: number) => void;
+  onDelete: (kind: "payment" | "wash" | "service", id: number) => void;
+}) {
   const rows = [
-    ...data.payments.map((item) => ({ id: `p${item.id}`, time: item.createdAt, plate: item.plate, type: item.paymentType, amount: item.amount })),
-    ...data.washes.map((item) => ({ id: `w${item.id}`, time: item.createdAt, plate: item.plate, type: item.workItem, amount: item.finalAmount })),
-    ...data.services.map((item) => ({ id: `s${item.id}`, time: item.createdAt, plate: item.plate, type: item.serviceName, amount: item.finalAmount })),
+    ...data.payments.map((item) => ({ key: `p${item.id}`, id: item.id, kind: "payment" as const, time: item.createdAt, plate: item.plate, type: item.paymentType, amount: item.amount })),
+    ...data.washes.map((item) => ({ key: `w${item.id}`, id: item.id, kind: "wash" as const, time: item.createdAt, plate: item.plate, type: item.workItem, amount: item.finalAmount })),
+    ...data.services.map((item) => ({ key: `s${item.id}`, id: item.id, kind: "service" as const, time: item.createdAt, plate: item.plate, type: item.serviceName, amount: item.finalAmount })),
   ].sort((a, b) => b.time.localeCompare(a.time));
   return (
     <section className="page-section">
       <PageHeading eyebrow="DÒNG TIỀN" title="Thu chi tại bãi" description="Tổng hợp tiền tháng, rửa xe và dịch vụ đã ghi nhận." />
       <div className="finance-hero"><div><small>Tổng doanh thu</small><strong>{money(total)}</strong></div><span>↗ Đang cập nhật theo dữ liệu thực tế</span></div>
-      <div className="detail-card"><div className="table-wrap"><table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Nội dung</th><th>Số tiền</th></tr></thead><tbody>{rows.map((item) => <tr key={item.id}><td>{date(item.time)} · {time(item.time)}</td><td><strong>{item.plate}</strong></td><td>{item.type}</td><td><strong className="amount">＋{money(item.amount)}</strong></td></tr>)}</tbody></table></div>{!rows.length && <Empty text="Chưa có khoản thu nào." />}</div>
+      <div className="detail-card"><div className="table-wrap"><table><thead><tr><th>Ngày giờ</th><th>Biển số</th><th>Nội dung</th><th>Số tiền</th><th>Thao tác</th></tr></thead><tbody>{rows.map((item) => <tr key={item.key}><td>{date(item.time)} · {time(item.time)}</td><td><strong>{item.plate}</strong></td><td>{item.type}</td><td><strong className="amount">＋{money(item.amount)}</strong></td><td><div className="record-actions"><button className="edit-button" type="button" disabled={deleting} onClick={() => onEdit(item.kind, item.id)}>Chỉnh sửa</button><button className="delete-button" type="button" disabled={deleting} onClick={() => onDelete(item.kind, item.id)}>Xóa</button></div></td></tr>)}</tbody></table></div>{!rows.length && <Empty text="Chưa có khoản thu nào." />}</div>
     </section>
   );
 }
@@ -812,39 +934,43 @@ function VehicleForm({ vehicle, saving, onSubmit }: { vehicle: Vehicle | null; s
   return <form onSubmit={handle} className="form-grid"><Field label="Ô đỗ" name="slot" placeholder="A01" defaultValue={vehicle?.slot} required /><Field label="Biển số xe" name="plate" placeholder="51H-123.45" defaultValue={vehicle?.plate} required /><Field label="CHỦ XE" name="driverName" placeholder="Nguyễn Văn A" defaultValue={vehicle?.driverName} required /><Field label="Số điện thoại" name="phone" placeholder="0901 234 567" defaultValue={vehicle?.phone} required /><SelectField label="Loại xe" name="vehicleType" options={["Ô tô", "Xe máy", "Xe tải", "Xe khách"]} defaultValue={vehicle?.vehicleType} /><Field label="Tiền gửi mỗi tháng" name="monthlyFee" type="number" defaultValue={String(vehicle?.monthlyFee ?? 1200000)} required /><Field label="Số lượt rửa có sẵn" name="washCredits" type="number" defaultValue={String(vehicle?.washCredits ?? 0)} /><label className="check-field"><input type="checkbox" name="monthPaid" defaultChecked={vehicle?.monthPaid} /><span>Xe đã đóng tiền tháng này</span></label><SubmitButton saving={saving} label={vehicle ? "Lưu thay đổi" : "Lưu xe vào bãi"} /></form>;
 }
 
-function WashForm({ vehicles, saving, onSubmit }: { vehicles: Vehicle[]; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
-  const [vehicleId, setVehicleId] = useState(vehicles[0]?.id ?? 0);
-  const [workItem, setWorkItem] = useState("Rửa thường");
-  const [price, setPrice] = useState(50000);
+function WashForm({ vehicles, wash, saving, onSubmit }: { vehicles: Vehicle[]; wash: Wash | null; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
+  const matchedVehicle = vehicles.find((vehicle) => vehicle.id === wash?.vehicleId || vehicle.plate === wash?.plate);
+  const [vehicleId, setVehicleId] = useState(matchedVehicle?.id ?? vehicles[0]?.id ?? 0);
+  const [workItem, setWorkItem] = useState(wash?.workItem || "Rửa thường");
+  const [price, setPrice] = useState(wash?.price ?? 50000);
   const selected = vehicles.find((vehicle) => vehicle.id === vehicleId);
   const prices: Record<string, number> = { "Rửa thường": 50000, "Rửa + hút bụi": 70000, "Rửa + Wax": 80000, "Vệ sinh nội thất": 120000 };
+  const workItems = Object.keys(prices).includes(workItem) ? Object.keys(prices) : [workItem, ...Object.keys(prices)];
   function handle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     if (!selected) return;
-    void onSubmit({ action: "recordWash", vehicleId, plate: selected.plate, workItem, price, discount: form.get("discount"), usedCredit: form.get("usedCredit") === "on" });
+    void onSubmit({ action: wash ? "updateWash" : "recordWash", washId: wash?.id, vehicleId, plate: selected.plate, workItem, price, discount: form.get("discount"), usedCredit: form.get("usedCredit") === "on" });
   }
-  return <form onSubmit={handle} className="form-grid"><label className="field full"><span>Chọn xe tại bãi</span><select value={vehicleId} onChange={(event) => setVehicleId(Number(event.target.value))}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.driverName}</option>)}</select></label><label className="field"><span>Hạng mục công việc</span><select value={workItem} onChange={(event) => { setWorkItem(event.target.value); setPrice(prices[event.target.value] ?? 0); }}>{Object.keys(prices).map((item) => <option key={item}>{item}</option>)}</select></label><Field label="Giá" name="price" type="number" value={price} onChange={(value) => setPrice(Number(value))} /><Field label="Giảm giá" name="discount" type="number" defaultValue="0" /><label className="check-field full"><input type="checkbox" name="usedCredit" disabled={!selected?.washCredits} /><span>Dùng 1 lượt rửa miễn phí {selected ? `(còn ${selected.washCredits} lượt)` : ""}</span></label><SubmitButton saving={saving} label="Ghi nhận lượt rửa" /></form>;
+  return <form onSubmit={handle} className="form-grid"><label className="field full"><span>Chọn xe tại bãi</span><select value={vehicleId} disabled={Boolean(wash)} onChange={(event) => setVehicleId(Number(event.target.value))}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.driverName}</option>)}</select></label><label className="field"><span>Hạng mục công việc</span><select value={workItem} onChange={(event) => { setWorkItem(event.target.value); setPrice(prices[event.target.value] ?? price); }}>{workItems.map((item) => <option key={item}>{item}</option>)}</select></label><Field label="Giá" name="price" type="number" value={price} onChange={(value) => setPrice(Number(value))} /><Field label="Giảm giá" name="discount" type="number" defaultValue={String(wash?.discount ?? 0)} /><label className="check-field full"><input type="checkbox" name="usedCredit" defaultChecked={wash?.usedCredit} disabled={!wash?.usedCredit && !selected?.washCredits} /><span>Dùng 1 lượt rửa miễn phí {selected ? `(còn ${selected.washCredits} lượt)` : ""}</span></label><SubmitButton saving={saving} label={wash ? "Lưu thay đổi" : "Ghi nhận lượt rửa"} /></form>;
 }
 
-function PaymentForm({ vehicles, saving, onSubmit }: { vehicles: Vehicle[]; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
+function PaymentForm({ vehicles, payment, saving, onSubmit }: { vehicles: Vehicle[]; payment: Payment | null; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
   const stored = typeof window !== "undefined" ? Number(sessionStorage.getItem("selectedVehicle")) : 0;
-  const [vehicleId, setVehicleId] = useState(stored || vehicles.find((vehicle) => !vehicle.monthPaid)?.id || vehicles[0]?.id || 0);
+  const matchedVehicle = vehicles.find((vehicle) => vehicle.id === payment?.vehicleId || vehicle.plate === payment?.plate);
+  const [vehicleId, setVehicleId] = useState(matchedVehicle?.id || stored || vehicles.find((vehicle) => !vehicle.monthPaid)?.id || vehicles[0]?.id || 0);
   const selected = vehicles.find((vehicle) => vehicle.id === vehicleId);
   function handle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
-    void onSubmit({ action: "collectPayment", vehicleId, amount: form.get("amount"), note: form.get("note") });
+    void onSubmit({ action: payment ? "updatePayment" : "collectPayment", paymentId: payment?.id, vehicleId, amount: form.get("amount"), note: form.get("note") });
   }
-  return <form onSubmit={handle} className="form-grid"><label className="field full"><span>Chọn xe cần thu</span><select value={vehicleId} onChange={(event) => setVehicleId(Number(event.target.value))}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.driverName} {vehicle.monthPaid ? "(đã đóng)" : "(chưa đóng)"}</option>)}</select></label><Field label="Số tiền" name="amount" type="number" key={selected?.id} defaultValue={String(selected?.monthlyFee ?? 0)} required /><Field label="Ghi chú" name="note" placeholder="Tiền tháng hiện tại" /><div className="payment-preview full"><span>Xe sẽ được chuyển sang trạng thái</span><PaidBadge paid /></div><SubmitButton saving={saving} label="Xác nhận đã thu" /></form>;
+  return <form onSubmit={handle} className="form-grid"><label className="field full"><span>Chọn xe cần thu</span><select value={vehicleId} disabled={Boolean(payment)} onChange={(event) => setVehicleId(Number(event.target.value))}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.driverName} {vehicle.monthPaid ? "(đã đóng)" : "(chưa đóng)"}</option>)}</select></label><Field label="Số tiền" name="amount" type="number" key={`${selected?.id}-${payment?.id || "new"}`} defaultValue={String(payment?.amount ?? selected?.monthlyFee ?? 0)} required /><Field label="Ghi chú" name="note" placeholder="Tiền tháng hiện tại" defaultValue={payment?.note} /><div className="payment-preview full"><span>{payment ? "Khoản thu sau khi chỉnh sửa" : "Xe sẽ được chuyển sang trạng thái"}</span>{payment ? <strong>{payment.paymentType}</strong> : <PaidBadge paid />}</div><SubmitButton saving={saving} label={payment ? "Lưu thay đổi" : "Xác nhận đã thu"} /></form>;
 }
 
-function ServiceForm({ vehicles, saving, onSubmit }: { vehicles: Vehicle[]; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
-  const [vehicleId, setVehicleId] = useState(vehicles[0]?.id ?? 0);
+function ServiceForm({ vehicles, service, saving, onSubmit }: { vehicles: Vehicle[]; service: Service | null; saving: boolean; onSubmit: (payload: Record<string, unknown>) => Promise<void> }) {
+  const matchedVehicle = vehicles.find((vehicle) => vehicle.id === service?.vehicleId || vehicle.plate === service?.plate);
+  const [vehicleId, setVehicleId] = useState(matchedVehicle?.id ?? vehicles[0]?.id ?? 0);
   const selected = vehicles.find((vehicle) => vehicle.id === vehicleId);
   function handle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
-    void onSubmit({ action: "addService", vehicleId, plate: selected?.plate, serviceName: form.get("serviceName"), price: form.get("price"), discount: form.get("discount"), bonusWashes: form.get("bonusWashes"), note: form.get("note") });
+    void onSubmit({ action: service ? "updateService" : "addService", serviceId: service?.id, vehicleId, plate: selected?.plate, serviceName: form.get("serviceName"), price: form.get("price"), discount: form.get("discount"), bonusWashes: form.get("bonusWashes"), note: form.get("note") });
   }
-  return <form onSubmit={handle} className="form-grid"><label className="field full"><span>Xe sử dụng dịch vụ</span><select value={vehicleId} onChange={(event) => setVehicleId(Number(event.target.value))}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.driverName}</option>)}</select></label><Field label="Tên dịch vụ" name="serviceName" placeholder="Ví dụ: Thuê tài xế đưa xe đi đăng kiểm" required /><Field label="Giá dịch vụ" name="price" type="number" defaultValue="500000" required /><Field label="Chiết khấu / giảm giá" name="discount" type="number" defaultValue="0" /><Field label="Tặng số lượt rửa" name="bonusWashes" type="number" defaultValue="0" /><Field label="Ghi chú" name="note" placeholder="Thông tin thêm…" className="full" /><SubmitButton saving={saving} label="Lưu dịch vụ" /></form>;
+  return <form onSubmit={handle} className="form-grid"><label className="field full"><span>Xe sử dụng dịch vụ</span><select value={vehicleId} disabled={Boolean(service)} onChange={(event) => setVehicleId(Number(event.target.value))}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.driverName}</option>)}</select></label><Field label="Tên dịch vụ" name="serviceName" placeholder="Ví dụ: Thuê tài xế đưa xe đi đăng kiểm" defaultValue={service?.serviceName} required /><Field label="Giá dịch vụ" name="price" type="number" defaultValue={String(service?.price ?? 500000)} required /><Field label="Chiết khấu / giảm giá" name="discount" type="number" defaultValue={String(service?.discount ?? 0)} /><Field label="Tặng số lượt rửa" name="bonusWashes" type="number" defaultValue={String(service?.bonusWashes ?? 0)} /><Field label="Ghi chú" name="note" placeholder="Thông tin thêm…" className="full" defaultValue={service?.note} /><SubmitButton saving={saving} label={service ? "Lưu thay đổi" : "Lưu dịch vụ"} /></form>;
 }
 
 function Field({ label, name, type = "text", placeholder, defaultValue, required, className = "", value, onChange }: { label: string; name: string; type?: string; placeholder?: string; defaultValue?: string; required?: boolean; className?: string; value?: string | number; onChange?: (value: string) => void }) {

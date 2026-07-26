@@ -46,6 +46,7 @@ function wash(row: Record<string, unknown>) {
   const parsed = parsedWorkItem(row.work_item);
   return {
     id: Number(row.id),
+    vehicleId: Number(row.vehicle_id || 0),
     plate: String(row.plate),
     workItem: parsed.workItem,
     price: Number(row.price),
@@ -61,6 +62,7 @@ function wash(row: Record<string, unknown>) {
 function service(row: Record<string, unknown>) {
   return {
     id: Number(row.id),
+    vehicleId: Number(row.vehicle_id || 0),
     plate: String(row.plate),
     serviceName: String(row.service_name),
     price: Number(row.price),
@@ -75,9 +77,11 @@ function service(row: Record<string, unknown>) {
 function payment(row: Record<string, unknown>) {
   return {
     id: Number(row.id),
+    vehicleId: Number(row.vehicle_id || 0),
     plate: String(row.plate),
     amount: Number(row.amount),
     paymentType: String(row.payment_type),
+    note: String(row.note || ""),
     createdAt: String(row.created_at),
   };
 }
@@ -105,6 +109,24 @@ async function requireSession() {
   const session = await getParkingSession();
   if (!session) return null;
   return session;
+}
+
+async function setVehicleWashCredits(vehicleId: number, value: number) {
+  if (!vehicleId) return;
+  await adminRequest(`parking_vehicles?id=eq.${vehicleId}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ wash_credits: Math.max(Math.trunc(value), 0) }),
+  });
+}
+
+async function vehicleWashCredits(vehicleId: number) {
+  if (!vehicleId) return 0;
+  const rows = await adminRequest(
+    `parking_vehicles?select=wash_credits&id=eq.${vehicleId}&limit=1`,
+  ) as Record<string, unknown>[];
+  if (!rows.length) throw new Error("Không tìm thấy xe liên quan.");
+  return Number(rows[0].wash_credits || 0);
 }
 
 async function adminData(session: ParkingSession) {
@@ -249,6 +271,180 @@ export async function POST(request: Request) {
         method: "DELETE",
         headers: { Prefer: "return=minimal" },
       });
+      return Response.json({ ok: true });
+    }
+
+    if (action === "updateWash") {
+      const washId = Number(payload.washId);
+      const rows = await adminRequest(
+        `parking_washes?select=*&id=eq.${washId}&limit=1`,
+      ) as Record<string, unknown>[];
+      const selectedWash = rows[0];
+      if (!selectedWash) {
+        return Response.json({ error: "Không tìm thấy lượt rửa cần chỉnh sửa." }, { status: 404 });
+      }
+
+      const cleanWorkItem = String(payload.workItem || "").trim();
+      const cleanPrice = Math.max(Number(payload.price) || 0, 0);
+      const usedCredit = Boolean(payload.usedCredit);
+      const cleanDiscount = usedCredit
+        ? cleanPrice
+        : Math.min(cleanPrice, Math.max(Number(payload.discount) || 0, 0));
+      if (!cleanWorkItem) {
+        return Response.json({ error: "Vui lòng nhập hạng mục rửa." }, { status: 400 });
+      }
+
+      const vehicleId = Number(selectedWash.vehicle_id || 0);
+      const previousUsedCredit = Boolean(selectedWash.used_credit);
+      let previousCredits: number | null = null;
+      if (vehicleId && previousUsedCredit !== usedCredit) {
+        previousCredits = await vehicleWashCredits(vehicleId);
+        if (usedCredit && previousCredits < 1) {
+          return Response.json({ error: "Xe này không còn lượt rửa miễn phí." }, { status: 400 });
+        }
+        await setVehicleWashCredits(
+          vehicleId,
+          previousCredits + (previousUsedCredit ? 1 : -1),
+        );
+      }
+
+      const existingWorkItem = parsedWorkItem(selectedWash.work_item);
+      const storedWorkItem = existingWorkItem.createdByName
+        ? workItemWithCreator(cleanWorkItem, existingWorkItem.createdByName)
+        : cleanWorkItem;
+      try {
+        await adminRequest(`parking_washes?id=eq.${washId}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            work_item: storedWorkItem,
+            price: cleanPrice,
+            discount: cleanDiscount,
+            final_amount: cleanPrice - cleanDiscount,
+            used_credit: usedCredit,
+          }),
+        });
+      } catch (error) {
+        if (vehicleId && previousCredits != null) {
+          await setVehicleWashCredits(vehicleId, previousCredits).catch(() => null);
+        }
+        throw error;
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (action === "updateService" || action === "deleteService") {
+      const serviceId = Number(payload.serviceId);
+      const rows = await adminRequest(
+        `parking_services?select=*&id=eq.${serviceId}&limit=1`,
+      ) as Record<string, unknown>[];
+      const selectedService = rows[0];
+      if (!selectedService) {
+        return Response.json({ error: "Không tìm thấy dịch vụ." }, { status: 404 });
+      }
+
+      const vehicleId = Number(selectedService.vehicle_id || 0);
+      const previousBonus = Number(selectedService.bonus_washes || 0);
+      const nextBonus = action === "deleteService"
+        ? 0
+        : Math.max(Math.trunc(Number(payload.bonusWashes) || 0), 0);
+      let previousCredits: number | null = null;
+      if (vehicleId && previousBonus !== nextBonus) {
+        previousCredits = await vehicleWashCredits(vehicleId);
+        await setVehicleWashCredits(vehicleId, previousCredits + nextBonus - previousBonus);
+      }
+
+      try {
+        if (action === "deleteService") {
+          await adminRequest(`parking_services?id=eq.${serviceId}`, {
+            method: "DELETE",
+            headers: { Prefer: "return=minimal" },
+          });
+        } else {
+          const serviceName = String(payload.serviceName || "").trim();
+          const cleanPrice = Math.max(Number(payload.price) || 0, 0);
+          const cleanDiscount = Math.min(cleanPrice, Math.max(Number(payload.discount) || 0, 0));
+          if (!serviceName) {
+            if (vehicleId && previousCredits != null) {
+              await setVehicleWashCredits(vehicleId, previousCredits).catch(() => null);
+            }
+            return Response.json({ error: "Vui lòng nhập tên dịch vụ." }, { status: 400 });
+          }
+          await adminRequest(`parking_services?id=eq.${serviceId}`, {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({
+              service_name: serviceName,
+              price: cleanPrice,
+              discount: cleanDiscount,
+              final_amount: cleanPrice - cleanDiscount,
+              bonus_washes: nextBonus,
+              note: String(payload.note || "").trim(),
+            }),
+          });
+        }
+      } catch (error) {
+        if (vehicleId && previousCredits != null) {
+          await setVehicleWashCredits(vehicleId, previousCredits).catch(() => null);
+        }
+        throw error;
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (action === "updatePayment") {
+      const paymentId = Number(payload.paymentId);
+      const amount = Math.max(Number(payload.amount) || 0, 0);
+      const updated = await adminRequest(`parking_payments?id=eq.${paymentId}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          amount,
+          note: String(payload.note || "").trim(),
+        }),
+      }) as Record<string, unknown>[];
+      if (!updated.length) {
+        return Response.json({ error: "Không tìm thấy khoản thu." }, { status: 404 });
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deletePayment") {
+      const paymentId = Number(payload.paymentId);
+      const rows = await adminRequest(
+        `parking_payments?select=*&id=eq.${paymentId}&limit=1`,
+      ) as Record<string, unknown>[];
+      const selectedPayment = rows[0];
+      if (!selectedPayment) {
+        return Response.json({ error: "Không tìm thấy khoản thu." }, { status: 404 });
+      }
+      await adminRequest(`parking_payments?id=eq.${paymentId}`, {
+        method: "DELETE",
+        headers: { Prefer: "return=minimal" },
+      });
+
+      const vehicleId = Number(selectedPayment.vehicle_id || 0);
+      const createdAt = new Date(String(selectedPayment.created_at));
+      const now = new Date();
+      const isCurrentMonth = createdAt.getFullYear() === now.getFullYear() &&
+        createdAt.getMonth() === now.getMonth();
+      if (vehicleId && selectedPayment.payment_type === "Tiền tháng" && isCurrentMonth) {
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+        const remaining = await adminRequest(
+          `parking_payments?select=id&vehicle_id=eq.${vehicleId}` +
+          `&payment_type=eq.${encodeURIComponent("Tiền tháng")}` +
+          `&created_at=gte.${encodeURIComponent(monthStart)}` +
+          `&created_at=lt.${encodeURIComponent(nextMonth)}&limit=1`,
+        ) as Record<string, unknown>[];
+        if (!remaining.length) {
+          await adminRequest(`parking_vehicles?id=eq.${vehicleId}`, {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({ month_paid: false }),
+          });
+        }
+      }
       return Response.json({ ok: true });
     }
 
