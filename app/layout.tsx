@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Bãi xe Thầy Đạt",
-  description: "Quản lý xe gửi, rửa xe, dịch vụ và thu chi tại bãi xe.",
+  title: "BÃI XE MINH PHÚC",
+  description: "Hệ thống quản lý xe gửi, rửa xe, dịch vụ và thu chi của Bãi xe Minh Phúc.",
   other: {
     "codex-preview": "development",
   },

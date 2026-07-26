@@ -199,7 +199,7 @@ export default function ParkingManager() {
       <header className="site-header">
         <button className="brand" onClick={() => setView(isAdmin ? "overview" : "washes")} aria-label={isAdmin ? "Về trang tổng quan" : "Về nhật ký rửa xe"}>
           <span className="brand-mark">P</span>
-          <strong>Quản lý bãi xe</strong>
+          <strong>BÃI XE MINH PHÚC</strong>
         </button>
         <nav className="desktop-nav" aria-label="Điều hướng chính">
           {visibleNavItems.map((item) => (
@@ -310,7 +310,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
   return (
     <main className="login-page">
       <section className="login-card">
-        <div className="login-brand"><span className="brand-mark">P</span><div><strong>Quản lý bãi xe</strong><small>Vận hành nhanh, dữ liệu tập trung</small></div></div>
+        <div className="login-brand"><span className="brand-mark">P</span><div><strong>BÃI XE MINH PHÚC</strong><small>Vận hành nhanh, dữ liệu tập trung</small></div></div>
         <div className="login-heading"><span>ĐĂNG NHẬP HỆ THỐNG</span><h1>Chào mừng trở lại</h1><p>Nhập tài khoản do quản trị viên cấp để tiếp tục.</p></div>
         {error && <div className="login-error" role="alert">! <span>{error}</span></div>}
         <form className="login-form" onSubmit={login}>
