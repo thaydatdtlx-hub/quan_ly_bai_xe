@@ -1,5 +1,32 @@
 import { adminRequest, getParkingSession, type ParkingSession } from "../../../lib/parking-auth";
 
+const LEGACY_CREATOR_MARKER = " ⟦parking_creator:";
+
+function workItemWithCreator(workItem: string, creatorName: string) {
+  const cleanWorkItem = workItem.trim();
+  const cleanCreatorName = creatorName.trim();
+  if (!cleanCreatorName) return cleanWorkItem;
+  return `${cleanWorkItem}${LEGACY_CREATOR_MARKER}${encodeURIComponent(cleanCreatorName)}⟧`;
+}
+
+function parsedWorkItem(value: unknown) {
+  const raw = String(value || "");
+  const markerIndex = raw.lastIndexOf(LEGACY_CREATOR_MARKER);
+  if (markerIndex < 0 || !raw.endsWith("⟧")) {
+    return { workItem: raw, createdByName: "" };
+  }
+
+  const encodedName = raw.slice(markerIndex + LEGACY_CREATOR_MARKER.length, -1);
+  try {
+    return {
+      workItem: raw.slice(0, markerIndex),
+      createdByName: decodeURIComponent(encodedName),
+    };
+  } catch {
+    return { workItem: raw, createdByName: "" };
+  }
+}
+
 function vehicle(row: Record<string, unknown>, staff = false) {
   return {
     id: Number(row.id),
@@ -16,16 +43,17 @@ function vehicle(row: Record<string, unknown>, staff = false) {
 }
 
 function wash(row: Record<string, unknown>) {
+  const parsed = parsedWorkItem(row.work_item);
   return {
     id: Number(row.id),
     plate: String(row.plate),
-    workItem: String(row.work_item),
+    workItem: parsed.workItem,
     price: Number(row.price),
     discount: Number(row.discount),
     finalAmount: Number(row.final_amount),
     usedCredit: Boolean(row.used_credit),
     createdById: String(row.created_by || ""),
-    createdByName: String(row.created_by_name || ""),
+    createdByName: String(row.created_by_name || parsed.createdByName || ""),
     createdAt: String(row.created_at),
   };
 }
@@ -103,13 +131,18 @@ async function adminData(session: ParkingSession) {
       .filter((item) => item.sourceId != null && item.createdByName)
       .map((item) => [item.sourceId as number, item.createdByName]),
   );
-  const enrichedWashes: Record<string, unknown>[] = washes.map((row) => ({
-    ...row,
-    created_by_name: String(row.created_by_name || "") ||
-      profileNames.get(String(row.created_by || "")) ||
-      notificationNames.get(Number(row.id)) ||
-      "",
-  }));
+  const enrichedWashes: Record<string, unknown>[] = washes.map((row) => {
+    const parsed = parsedWorkItem(row.work_item);
+    return {
+      ...row,
+      work_item: parsed.workItem,
+      created_by_name: String(row.created_by_name || "") ||
+        parsed.createdByName ||
+        profileNames.get(String(row.created_by || "")) ||
+        notificationNames.get(Number(row.id)) ||
+        "",
+    };
+  });
   const notifiedWashIds = new Set(
     savedNotifications
       .map((item) => item.sourceId)
@@ -250,7 +283,10 @@ export async function POST(request: Request) {
         if (!isMissingUpgrade) throw error;
         await adminRequest("rpc/parking_record_wash", {
           method: "POST",
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            ...body,
+            p_work_item: workItemWithCreator(String(payload.workItem || ""), session.fullName),
+          }),
         });
       }
       const recentWashes = await adminRequest(
